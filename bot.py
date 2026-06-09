@@ -149,67 +149,95 @@ async def sell_game_selected(callback):
     )
     await callback.answer()
 
-@dp.message(F.photo, lambda m: m.chat.id != ADMIN_ID)
+# Обработчик фото для продажи (для всех пользователей, включая админа?)
+@dp.message(F.photo)
 async def save_sell_photo(message: types.Message):
     user_id = str(message.from_user.id)
+    
+    # Проверяем, есть ли пользователь в процессе продажи
     if user_id not in user_temp or user_temp[user_id].get("step") != "selling":
-        await message.answer("❌ Сначала нажмите /start и выберите 'Продать аккаунт'")
+        # Если пользователь не в процессе продажи, игнорируем
         return
-    user_temp[user_id]["screenshots"].append(message.photo[-1].file_id)
-    await message.answer(f"✅ Скриншот #{len(user_temp[user_id]['screenshots'])} сохранен!\nОтправьте еще или /done_sell")
+    
+    photo = message.photo[-1].file_id
+    user_temp[user_id]["screenshots"].append(photo)
+    await message.answer(
+        f"✅ Скриншот #{len(user_temp[user_id]['screenshots'])} сохранен!\n"
+        f"Отправьте еще или нажмите /done_sell"
+    )
 
 @dp.message(Command("done_sell"))
 async def finish_sell(message: types.Message):
     user_id = str(message.from_user.id)
+    
     if user_id not in user_temp or user_temp[user_id].get("step") != "selling":
-        await message.answer("❌ Нет активной заявки на продажу")
+        await message.answer("❌ Нет активной заявки на продажу. Сначала нажмите /start и выберите 'Продать аккаунт'")
         return
+    
     data = user_temp[user_id]
-    if not data.get("screenshots"):
-        await message.answer("❌ Отправьте хотя бы один скриншот!")
+    screenshots = data.get("screenshots", [])
+    
+    if not screenshots:
+        await message.answer("❌ Вы не отправили ни одного скриншота! Сначала отправьте фото, потом /done_sell")
         return
+    
     request_id = str(int(time.time()))
     username = message.from_user.username or message.from_user.first_name
+    
     sell_requests[request_id] = {
-        "user_id": user_id, "username": username,
-        "game_code": data["game_code"], "screenshots": data["screenshots"], "status": "pending"
+        "user_id": user_id,
+        "username": username,
+        "game_code": data["game_code"],
+        "screenshots": screenshots,
+        "status": "pending",
+        "created_at": datetime.now().isoformat()
     }
     save_data(SELL_REQUESTS_FILE, sell_requests)
+    
     game_name = get_game_display(data["game_code"])
+    
     await bot.send_message(
         ADMIN_ID,
         f"🆕 <b>НОВАЯ ЗАЯВКА НА ПРОДАЖУ #{request_id}</b>\n\n"
         f"👤 Продавец: @{username}\n"
         f"🎮 Игра: {game_name}\n"
-        f"📸 Скриншотов: {len(data['screenshots'])}\n\n"
+        f"📸 Скриншотов: {len(screenshots)}\n\n"
         f"<b>Чтобы отправить цену:</b>\n"
         f"<code>/price_sell {request_id} ЦЕНА</code>",
         parse_mode="HTML"
     )
-    for idx, photo in enumerate(data["screenshots"], 1):
+    
+    for idx, photo in enumerate(screenshots, 1):
         await bot.send_photo(ADMIN_ID, photo, caption=f"Заявка #{request_id} | Скриншот {idx}")
+    
     await message.answer(
         f"✅ <b>Заявка на продажу отправлена!</b>\n\n"
         f"Номер заявки: <code>{request_id}</code>\n"
         f"Админ оценит аккаунт и напишет цену.",
         parse_mode="HTML"
     )
+    
     del user_temp[user_id]
 
 @dp.message(Command("price_sell"))
 async def admin_send_price(message: types.Message):
     if message.chat.id != ADMIN_ID:
         return
+    
     parts = message.text.split(maxsplit=2)
     if len(parts) < 3:
         await message.reply("❌ Формат: /price_sell НОМЕР_ЗАЯВКИ ЦЕНА\nПример: /price_sell 123456789 5000")
         return
+    
     request_id = parts[1]
     price = parts[2]
+    
     if request_id not in sell_requests:
         await message.reply(f"❌ Заявка #{request_id} не найдена!")
         return
+    
     req = sell_requests[request_id]
+    
     try:
         await bot.send_message(
             int(req["user_id"]),
@@ -251,13 +279,11 @@ async def buy_game_selected(callback):
     )
     await callback.answer()
 
-# Просмотр аккаунта
 @dp.callback_query(lambda c: c.data.startswith("view_acc_"))
 async def view_account(callback):
-    account_id = callback.data.split("_")[2]  # view_acc_123456 -> берем 123456
+    account_id = callback.data.split("_")[2]
     print(f"[DEBUG] Просмотр аккаунта с ID: {account_id}")
     
-    # Ищем аккаунт по ID
     account = None
     for acc in accounts:
         if acc["id"] == account_id:
@@ -274,7 +300,6 @@ async def view_account(callback):
         await callback.answer()
         return
     
-    # Отправляем скриншоты
     if account.get("screenshots"):
         for photo in account["screenshots"]:
             await callback.message.answer_photo(photo)
@@ -294,13 +319,11 @@ async def view_account(callback):
     )
     await callback.answer()
 
-# Покупка аккаунта
 @dp.callback_query(lambda c: c.data.startswith("buy_acc_"))
 async def buy_account(callback):
-    account_id = callback.data.split("_")[2]  # buy_acc_123456 -> берем 123456
+    account_id = callback.data.split("_")[2]
     print(f"[DEBUG] Покупка аккаунта с ID: {account_id}")
     
-    # Ищем аккаунт
     account = None
     for acc in accounts:
         if acc["id"] == account_id:
@@ -348,7 +371,7 @@ async def buy_account(callback):
     await callback.message.edit_text(
         f"✅ <b>Запрос на покупку отправлен!</b>\n\n"
         f"Номер запроса: <code>{request_id}</code>\n"
-        f"Админ свяжется с вами после проверки оплаты.",
+        f"В течение нескольких минут с вами свяжется Админ насчет оплаты.",
         parse_mode="HTML"
     )
     await callback.answer()
