@@ -40,17 +40,15 @@ sell_requests = load_data(SELL_REQUESTS_FILE, {})
 buy_requests = load_data(BUY_REQUESTS_FILE, {})
 user_temp = {}
 
-# Нормализация названий игр
-def normalize_game(game_name):
-    game_map = {
-        "brawl": "brawl",
-        "brawl stars": "brawl",
-        "brawlstars": "brawl",
-        "fortnite": "fortnite",
-        "Brawl Stars": "brawl",
-        "Fortnite": "fortnite"
-    }
-    return game_map.get(game_name.lower(), game_name.lower())
+# Функция для преобразования названия игры в код
+def game_to_code(game_name):
+    game_lower = game_name.lower().strip()
+    if "brawl" in game_lower:
+        return "brawl"
+    elif "fortnite" in game_lower:
+        return "fortnite"
+    else:
+        return game_lower
 
 def get_game_display(game_code):
     return "Brawl Stars" if game_code == "brawl" else "Fortnite"
@@ -71,8 +69,16 @@ def game_menu(action):
     return keyboard
 
 def accounts_list_by_game(game_code):
-    # Ищем аккаунты с таким же game_code
+    # Отладочный вывод в консоль Railway
+    print(f"🔍 Поиск аккаунтов для игры: {game_code}")
+    print(f"📦 Всего аккаунтов в базе: {len(accounts)}")
+    for acc in accounts:
+        print(f"   - {acc.get('name')}: game_code={acc.get('game_code')}, status={acc.get('status')}")
+    
+    # Ищем аккаунты
     acc_list = [acc for acc in accounts if acc.get("game_code") == game_code and acc.get("status") == "available"]
+    
+    print(f"✅ Найдено аккаунтов: {len(acc_list)}")
     
     if not acc_list:
         return None
@@ -112,9 +118,10 @@ def delete_accounts_list():
     keyboard = InlineKeyboardMarkup(inline_keyboard=[])
     for acc in accounts:
         status_emoji = "🟢" if acc["status"] == "available" else "🔴"
+        game_name = get_game_display(acc.get("game_code", "unknown"))
         keyboard.inline_keyboard.append([
             InlineKeyboardButton(
-                text=f"{status_emoji} {acc['name']} - {acc['price']} руб. [{acc['status']}]",
+                text=f"{status_emoji} [{game_name}] {acc['name']} - {acc['price']} руб.",
                 callback_data=f"del_acc_{acc['id']}"
             )
         ])
@@ -289,7 +296,7 @@ async def start_buy(callback):
 
 @dp.callback_query(lambda c: c.data.startswith("buy_"))
 async def buy_game_selected(callback):
-    game_code = callback.data.split("_")[1]  # "brawl" или "fortnite"
+    game_code = callback.data.split("_")[1]
     game_name = get_game_display(game_code)
     
     keyboard = accounts_list_by_game(game_code)
@@ -330,7 +337,7 @@ async def view_account(callback):
     text = (
         f"🎮 <b>{account['name']}</b>\n\n"
         f"💰 Цена: <b>{account['price']} руб.</b>\n"
-        f"🎯 Игра: {get_game_display(account['game_code'])}\n"
+        f"🎯 Игра: {get_game_display(account.get('game_code', 'unknown'))}\n"
         f"📝 Описание:\n{account['description']}\n\n"
         f"⚠️ После оплаты вы получите логин и пароль"
     )
@@ -363,8 +370,8 @@ async def buy_account(callback):
         "account_name": account["name"],
         "account_data": account.get("login_data", "Данные выдаст админ после оплаты"),
         "price": account["price"],
-        "game": get_game_display(account["game_code"]),
-        "game_code": account["game_code"],
+        "game": get_game_display(account.get("game_code", "unknown")),
+        "game_code": account.get("game_code", "unknown"),
         "status": "pending",
         "created_at": datetime.now().isoformat()
     }
@@ -374,7 +381,7 @@ async def buy_account(callback):
         ADMIN_ID,
         f"🛒 <b>НОВЫЙ ЗАПРОС НА ПОКУПКУ #{request_id}</b>\n\n"
         f"👤 Покупатель: @{username}\n"
-        f"🎮 Игра: {get_game_display(account['game_code'])}\n"
+        f"🎮 Игра: {get_game_display(account.get('game_code', 'unknown'))}\n"
         f"🎯 Аккаунт: {account['name']}\n"
         f"💰 Сумма: {account['price']} руб.\n\n"
         f"<b>Действия:</b>\n"
@@ -452,7 +459,7 @@ async def admin_confirm_delete(callback):
     await callback.message.edit_text(
         f"⚠️ <b>Подтверждение удаления</b>\n\n"
         f"Вы действительно хотите удалить аккаунт?\n\n"
-        f"🎮 {get_game_display(account['game_code'])}\n"
+        f"🎮 {get_game_display(account.get('game_code', 'unknown'))}\n"
         f"🎯 {account['name']}\n"
         f"💰 {account['price']} руб.\n"
         f"📝 {account['description']}\n\n"
@@ -526,9 +533,9 @@ async def admin_add_account_start(callback):
         "➕ <b>Добавление аккаунта</b>\n\n"
         "Сначала отправьте ДАННЫЕ аккаунта в формате:\n\n"
         "<code>Игра:Название:Цена:Описание:Логин:Пароль</code>\n\n"
-        "Игра пишется строго:\n"
-        "• <code>Brawl Stars</code>\n"
-        "• <code>Fortnite</code>\n\n"
+        "<b>Названия игр (можно писать как угодно):</b>\n"
+        "• Brawl Stars, brawl, бравл, brawlstars\n"
+        "• Fortnite, фортнайт, fort\n\n"
         "Пример:\n"
         "<code>Brawl Stars:Легендарка:5000:Полный набор всех скинов:user123:pass123</code>\n\n"
         "После этого отправьте СКРИНШОТЫ (можно несколько).\n"
@@ -545,13 +552,14 @@ async def admin_add_account_data(message: types.Message):
             await message.reply("❌ Неверный формат! Нужно 6 полей через двоеточие\n\nПример:\nBrawl Stars:Легендарка:5000:Описание:логин:пароль")
             return
         
-        game, name, price, description, login, password = data[0], data[1], data[2], data[3], data[4], data[5]
+        game_input, name, price, description, login, password = data[0], data[1], data[2], data[3], data[4], data[5]
         
-        # Нормализуем игру
-        game_code = normalize_game(game)
+        # Определяем код игры
+        game_code = game_to_code(game_input)
+        game_display = "Brawl Stars" if game_code == "brawl" else "Fortnite"
         
         user_temp["admin"]["temp_account"] = {
-            "game_display": game.strip(),
+            "game_display": game_display,
             "game_code": game_code,
             "name": name.strip(),
             "price": int(price.strip()),
@@ -563,7 +571,7 @@ async def admin_add_account_data(message: types.Message):
         
         await message.reply(
             f"✅ Данные приняты!\n\n"
-            f"🎮 {game}\n"
+            f"🎮 {game_display}\n"
             f"🎯 {name}\n"
             f"💰 {price} руб.\n\n"
             f"📸 Теперь отправьте СКРИНШОТЫ аккаунта (можно несколько)\n"
@@ -638,7 +646,8 @@ async def admin_list_accounts(callback):
     text = "📋 <b>Список аккаунтов:</b>\n\n"
     for acc in accounts:
         status_emoji = "🟢" if acc["status"] == "available" else "🔴"
-        text += f"{status_emoji} <code>{acc['id']}</code> | {acc['name']} | {acc['price']} руб.\n"
+        game_name = get_game_display(acc.get("game_code", "unknown"))
+        text += f"{status_emoji} [{game_name}] <code>{acc['id']}</code> | {acc['name']} | {acc['price']} руб.\n"
     
     await callback.message.edit_text(text, parse_mode="HTML")
     await callback.answer()
