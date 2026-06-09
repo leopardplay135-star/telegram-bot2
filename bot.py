@@ -82,9 +82,27 @@ def admin_menu():
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="➕ Добавить аккаунт", callback_data="admin_add_account")],
         [InlineKeyboardButton(text="📋 Список аккаунтов", callback_data="admin_list_accounts")],
+        [InlineKeyboardButton(text="🗑 Удалить аккаунт", callback_data="admin_delete_account")],
         [InlineKeyboardButton(text="⏳ Заявки на покупку", callback_data="admin_view_buy_requests")],
         [InlineKeyboardButton(text="📝 Заявки на продажу", callback_data="admin_view_sell_requests")]
     ])
+    return keyboard
+
+# Клавиатура для выбора аккаунта на удаление
+def delete_accounts_list():
+    if not accounts:
+        return None
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[])
+    for acc in accounts:
+        status_emoji = "🟢" if acc["status"] == "available" else "🔴"
+        keyboard.inline_keyboard.append([
+            InlineKeyboardButton(
+                text=f"{status_emoji} {acc['name']} - {acc['price']} руб. [{acc['status']}]",
+                callback_data=f"del_acc_{acc['id']}"
+            )
+        ])
+    keyboard.inline_keyboard.append([InlineKeyboardButton(text="🔙 Назад в админку", callback_data="back_to_admin")])
     return keyboard
 
 # ==================== ПРОДАЖА АККАУНТА ====================
@@ -127,7 +145,6 @@ async def sell_game_selected(callback):
     )
     await callback.answer()
 
-# Обработка фото ТОЛЬКО от обычных пользователей (не админа)
 @dp.message(F.photo, lambda message: message.chat.id != ADMIN_ID)
 async def save_sell_photo(message: types.Message):
     user_id = str(message.from_user.id)
@@ -287,6 +304,11 @@ async def view_account(callback):
         await callback.answer()
         return
     
+    # Отправляем фото аккаунта
+    if account.get("screenshots"):
+        for photo in account["screenshots"]:
+            await callback.message.answer_photo(photo)
+    
     text = (
         f"🎮 <b>{account['name']}</b>\n\n"
         f"💰 Цена: <b>{account['price']} руб.</b>\n"
@@ -295,7 +317,7 @@ async def view_account(callback):
         f"⚠️ После оплаты вы получите логин и пароль"
     )
     
-    await callback.message.edit_text(
+    await callback.message.answer(
         text,
         reply_markup=account_action_menu(account_id),
         parse_mode="HTML"
@@ -366,6 +388,121 @@ async def admin_panel(message: types.Message):
         parse_mode="HTML"
     )
 
+# Удаление аккаунта - выбор
+@dp.callback_query(lambda c: c.data == "admin_delete_account")
+async def admin_delete_account_menu(callback):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("⛔ Доступ запрещен!")
+        return
+    
+    keyboard = delete_accounts_list()
+    
+    if not keyboard:
+        await callback.message.edit_text("📭 Нет аккаунтов для удаления")
+        await callback.answer()
+        return
+    
+    await callback.message.edit_text(
+        "🗑 <b>Удаление аккаунта</b>\n\n"
+        "Выберите аккаунт для удаления:",
+        reply_markup=keyboard,
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+# Подтверждение удаления
+@dp.callback_query(lambda c: c.data.startswith("del_acc_"))
+async def admin_confirm_delete(callback):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("⛔ Доступ запрещен!")
+        return
+    
+    account_id = callback.data.split("_")[2]
+    account = next((acc for acc in accounts if acc["id"] == account_id), None)
+    
+    if not account:
+        await callback.message.edit_text("❌ Аккаунт не найден!")
+        await callback.answer()
+        return
+    
+    # Сохраняем ID аккаунта для подтверждения
+    user_temp["admin_delete"] = {"account_id": account_id, "account_name": account["name"]}
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ ДА, удалить", callback_data="confirm_delete_yes"),
+         InlineKeyboardButton(text="❌ НЕТ, отмена", callback_data="confirm_delete_no")]
+    ])
+    
+    await callback.message.edit_text(
+        f"⚠️ <b>Подтверждение удаления</b>\n\n"
+        f"Вы действительно хотите удалить аккаунт?\n\n"
+        f"🎮 {account['game']}\n"
+        f"🎯 {account['name']}\n"
+        f"💰 {account['price']} руб.\n"
+        f"📝 {account['description']}\n\n"
+        f"<i>Это действие нельзя отменить!</i>",
+        reply_markup=keyboard,
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+# ДА - удаляем
+@dp.callback_query(lambda c: c.data == "confirm_delete_yes")
+async def admin_delete_confirm(callback):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("⛔ Доступ запрещен!")
+        return
+    
+    if "admin_delete" not in user_temp:
+        await callback.message.edit_text("❌ Ошибка! Попробуйте снова.")
+        await callback.answer()
+        return
+    
+    account_id = user_temp["admin_delete"]["account_id"]
+    account_name = user_temp["admin_delete"]["account_name"]
+    
+    # Удаляем аккаунт из списка
+    global accounts
+    accounts = [acc for acc in accounts if acc["id"] != account_id]
+    save_data(ACCOUNTS_FILE, accounts)
+    
+    # Очищаем временные данные
+    del user_temp["admin_delete"]
+    
+    await callback.message.edit_text(
+        f"✅ <b>Аккаунт удален!</b>\n\n"
+        f"Аккаунт '{account_name}' успешно удален из базы.",
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+# НЕТ - отмена
+@dp.callback_query(lambda c: c.data == "confirm_delete_no")
+async def admin_delete_cancel(callback):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("⛔ Доступ запрещен!")
+        return
+    
+    if "admin_delete" in user_temp:
+        del user_temp["admin_delete"]
+    
+    await callback.message.edit_text("❌ Удаление отменено.", parse_mode="HTML")
+    await callback.answer()
+
+@dp.callback_query(lambda c: c.data == "back_to_admin")
+async def back_to_admin(callback):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("⛔ Доступ запрещен!")
+        return
+    
+    await callback.message.edit_text(
+        "👑 <b>Панель администратора</b>\n\n"
+        "Выберите действие:",
+        reply_markup=admin_menu(),
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
 @dp.callback_query(lambda c: c.data == "admin_add_account")
 async def admin_add_account_start(callback):
     if callback.from_user.id != ADMIN_ID:
@@ -385,7 +522,6 @@ async def admin_add_account_start(callback):
     )
     await callback.answer()
 
-# Обработка текстовых данных от админа
 @dp.message(lambda message: message.chat.id == ADMIN_ID and user_temp.get("admin", {}).get("step") == "waiting_for_account_data")
 async def admin_add_account_data(message: types.Message):
     try:
@@ -417,7 +553,6 @@ async def admin_add_account_data(message: types.Message):
     except Exception as e:
         await message.reply(f"❌ Ошибка: {e}")
 
-# Обработка фото ТОЛЬКО от админа (для добавления аккаунта)
 @dp.message(F.photo, lambda message: message.chat.id == ADMIN_ID)
 async def admin_add_screenshots(message: types.Message):
     if "admin" not in user_temp or user_temp["admin"].get("step") != "waiting_for_screenshots":
