@@ -1,11 +1,12 @@
 import asyncio
 import json
 import os
+import re
 import time
+from datetime import datetime
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from datetime import datetime
 
 TOKEN = os.environ.get("TOKEN")
 ADMIN_ID = int(os.environ.get("ADMIN_ID", 0))
@@ -19,8 +20,8 @@ dp = Dispatcher()
 
 # Файлы для хранения данных
 ACCOUNTS_FILE = "accounts.json"
-PENDING_ORDERS_FILE = "pending_orders.json"
-USER_REQUESTS_FILE = "user_requests.json"
+SELL_REQUESTS_FILE = "sell_requests.json"
+BUY_REQUESTS_FILE = "buy_requests.json"
 
 def load_data(filename, default):
     try:
@@ -34,12 +35,10 @@ def save_data(filename, data):
         json.dump(data, f, indent=2, ensure_ascii=False)
 
 # Хранилища
-accounts = load_data(ACCOUNTS_FILE, [])  # Список аккаунтов на продажу
-pending_orders = load_data(PENDING_ORDERS_FILE, {})  # Заявки на продажу
-user_requests = load_data(USER_REQUESTS_FILE, {})  # Запросы на покупку
-
-# Временные данные пользователей
-user_temp = {}
+accounts = load_data(ACCOUNTS_FILE, [])           # Аккаунты на продажу (добавляет админ)
+sell_requests = load_data(SELL_REQUESTS_FILE, {}) # Заявки на продажу (от пользователей)
+buy_requests = load_data(BUY_REQUESTS_FILE, {})   # Заявки на покупку
+user_temp = {}                                     # Временные данные
 
 # ==================== КЛАВИАТУРЫ ====================
 def main_menu():
@@ -56,13 +55,13 @@ def game_menu(action):
     ])
     return keyboard
 
-def accounts_list_by_game(game, action="buy"):
-    accounts_list = [acc for acc in accounts if acc.get("game") == game and acc.get("status") == "available"]
-    if not accounts_list:
+def accounts_list_by_game(game):
+    acc_list = [acc for acc in accounts if acc.get("game") == game and acc.get("status") == "available"]
+    if not acc_list:
         return None
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[])
-    for acc in accounts_list:
+    for acc in acc_list:
         keyboard.inline_keyboard.append([
             InlineKeyboardButton(
                 text=f"🎮 {acc['name']} - {acc['price']} руб.",
@@ -83,8 +82,8 @@ def admin_menu():
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="➕ Добавить аккаунт", callback_data="admin_add_account")],
         [InlineKeyboardButton(text="📋 Список аккаунтов", callback_data="admin_list_accounts")],
-        [InlineKeyboardButton(text="⏳ Заявки на покупку", callback_data="admin_view_requests")],
-        [InlineKeyboardButton(text="🔄 Заявки на продажу", callback_data="admin_view_sell_orders")]
+        [InlineKeyboardButton(text="⏳ Заявки на покупку", callback_data="admin_view_buy_requests")],
+        [InlineKeyboardButton(text="📝 Заявки на продажу", callback_data="admin_view_sell_requests")]
     ])
     return keyboard
 
@@ -117,7 +116,6 @@ async def sell_game_selected(callback):
     user_temp[user_id] = {
         "step": "selling",
         "game": game_name,
-        "game_code": game,
         "screenshots": []
     }
     
@@ -160,43 +158,89 @@ async def finish_sell(message: types.Message):
         await message.answer("❌ Отправьте хотя бы один скриншот!")
         return
     
-    # Создаем заявку
-    order_id = str(int(time.time()))
+    request_id = str(int(time.time()))
     username = message.from_user.username or message.from_user.first_name
     
-    pending_orders[order_id] = {
+    sell_requests[request_id] = {
         "user_id": user_id,
         "username": username,
         "game": data["game"],
         "screenshots": screenshots,
-        "status": "pending"
+        "status": "pending",
+        "created_at": datetime.now().isoformat()
     }
-    save_data(PENDING_ORDERS_FILE, pending_orders)
+    save_data(SELL_REQUESTS_FILE, sell_requests)
     
     # Отправляем админу
     await bot.send_message(
         ADMIN_ID,
-        f"🆕 <b>НОВАЯ ЗАЯВКА НА ПРОДАЖУ #{order_id}</b>\n\n"
+        f"🆕 <b>НОВАЯ ЗАЯВКА НА ПРОДАЖУ #{request_id}</b>\n\n"
         f"👤 Продавец: @{username}\n"
         f"🎮 Игра: {data['game']}\n"
         f"📸 Скриншотов: {len(screenshots)}\n\n"
-        f"Чтобы принять заявку и добавить аккаунт:\n"
-        f"<code>/accept_sell {order_id} НАЗВАНИЕ ЦЕНА ОПИСАНИЕ ЛОГИН_ПАРОЛЬ</code>\n\n"
-        f"Пример:\n<code>/accept_sell {order_id} Легендарка 5000 Полный коллекция логин:pass</code>",
+        f"<b>Чтобы отправить цену продавцу, напишите:</b>\n"
+        f"<code>/price_sell {request_id} ЦЕНА</code>\n\n"
+        f"Пример: <code>/price_sell {request_id} 5000 рублей</code>",
         parse_mode="HTML"
     )
     
-    for photo in screenshots:
-        await bot.send_photo(ADMIN_ID, photo, caption=f"Заявка #{order_id}")
+    for idx, photo in enumerate(screenshots, 1):
+        await bot.send_photo(ADMIN_ID, photo, caption=f"Заявка #{request_id} | Скриншот {idx}")
     
     await message.answer(
         f"✅ <b>Заявка на продажу отправлена!</b>\n\n"
-        f"Номер заявки: <code>{order_id}</code>\n"
-        f"Админ рассмотрит её в ближайшее время.",
+        f"Номер заявки: <code>{request_id}</code>\n"
+        f"Админ оценит аккаунт и напишет цену в ближайшее время.",
         parse_mode="HTML"
     )
     
     del user_temp[user_id]
+
+@dp.message(Command("price_sell"))
+async def admin_send_price(message: types.Message):
+    if message.chat.id != ADMIN_ID:
+        return
+    
+    parts = message.text.split(maxsplit=2)
+    if len(parts) < 3:
+        await message.reply(
+            "❌ Формат: /price_sell НОМЕР_ЗАЯВКИ ЦЕНА\n"
+            "Пример: /price_sell 123456789 5000 рублей"
+        )
+        return
+    
+    request_id = parts[1]
+    price = parts[2]
+    
+    if request_id not in sell_requests:
+        await message.reply(f"❌ Заявка #{request_id} не найдена!")
+        return
+    
+    request = sell_requests[request_id]
+    
+    try:
+        await bot.send_message(
+            int(request["user_id"]),
+            f"💰 <b>Ваш аккаунт {request['game']} оценили!</b>\n\n"
+            f"Предложенная цена: <b>{price}</b>\n\n"
+            f"Если цена устраивает, свяжитесь с админом: @{message.from_user.username}\n"
+            f"Если нет - можете начать заново с /start",
+            parse_mode="HTML"
+        )
+        
+        # Отмечаем заявку как обработанную
+        sell_requests[request_id]["status"] = "priced"
+        sell_requests[request_id]["price"] = price
+        save_data(SELL_REQUESTS_FILE, sell_requests)
+        
+        await message.reply(
+            f"✅ Цена отправлена продавцу!\n\n"
+            f"👤 Продавец: @{request['username']}\n"
+            f"💰 Цена: {price}\n"
+            f"🆔 Заявка: #{request_id}"
+        )
+    except Exception as e:
+        await message.reply(f"❌ Ошибка: {e}")
 
 # ==================== ПОКУПКА АККАУНТА ====================
 @dp.callback_query(lambda c: c.data == "buy")
@@ -214,7 +258,7 @@ async def buy_game_selected(callback):
     game = callback.data.split("_")[1]
     game_name = "Brawl Stars" if game == "brawl" else "Fortnite"
     
-    keyboard = accounts_list_by_game(game_name, "buy")
+    keyboard = accounts_list_by_game(game_name)
     
     if not keyboard:
         await callback.message.edit_text(
@@ -252,10 +296,6 @@ async def view_account(callback):
         f"⚠️ После оплаты вы получите логин и пароль"
     )
     
-    # Сохраняем временно ID аккаунта для пользователя
-    user_id = str(callback.from_user.id)
-    user_temp[user_id] = {"viewing_account": account_id}
-    
     await callback.message.edit_text(
         text,
         reply_markup=account_action_menu(account_id),
@@ -276,9 +316,8 @@ async def buy_account(callback):
     user_id = str(callback.from_user.id)
     username = callback.from_user.username or callback.from_user.first_name
     
-    # Создаем запрос на покупку
     request_id = str(int(time.time()))
-    user_requests[request_id] = {
+    buy_requests[request_id] = {
         "user_id": user_id,
         "username": username,
         "account_id": account_id,
@@ -286,12 +325,11 @@ async def buy_account(callback):
         "account_data": account.get("login_data", "Данные выдаст админ после оплаты"),
         "price": account["price"],
         "game": account["game"],
-        "status": "pending",  # pending, confirmed, rejected
+        "status": "pending",
         "created_at": datetime.now().isoformat()
     }
-    save_data(USER_REQUESTS_FILE, user_requests)
+    save_data(BUY_REQUESTS_FILE, buy_requests)
     
-    # Отправляем админу
     await bot.send_message(
         ADMIN_ID,
         f"🛒 <b>НОВЫЙ ЗАПРОС НА ПОКУПКУ #{request_id}</b>\n\n"
@@ -300,8 +338,8 @@ async def buy_account(callback):
         f"🎯 Аккаунт: {account['name']}\n"
         f"💰 Сумма: {account['price']} руб.\n\n"
         f"<b>Действия:</b>\n"
-        f"✅ Подтвердить: <code>/confirm_pay {request_id}</code>\n"
-        f"❌ Отклонить: <code>/reject_pay {request_id}</code>\n\n"
+        f"✅ Подтвердить: <code>/confirm_buy {request_id}</code>\n"
+        f"❌ Отклонить: <code>/reject_buy {request_id}</code>\n\n"
         f"Данные аккаунта:\n<code>{account.get('login_data', 'Не указаны')}</code>",
         parse_mode="HTML"
     )
@@ -357,7 +395,6 @@ async def admin_add_account_data(message: types.Message):
         
         game, name, price, description, login, password = data[0], data[1], data[2], data[3], data[4], data[5]
         
-        # Временно сохраняем данные
         user_temp["admin"]["temp_account"] = {
             "game": game.strip(),
             "name": name.strip(),
@@ -400,7 +437,6 @@ async def admin_finish_account(message: types.Message):
         await message.reply("❌ Добавьте хотя бы один скриншот!")
         return
     
-    # Сохраняем аккаунт
     account_id = str(int(time.time()))
     accounts.append({
         "id": account_id,
@@ -440,109 +476,72 @@ async def admin_list_accounts(callback):
     
     text = "📋 <b>Список аккаунтов:</b>\n\n"
     for acc in accounts:
-        text += f"🆔 {acc['id']} | {acc['name']} | {acc['price']} руб. | {acc['status']}\n"
+        status_emoji = "🟢" if acc["status"] == "available" else "🔴"
+        text += f"{status_emoji} <code>{acc['id']}</code> | {acc['name']} | {acc['price']} руб.\n"
     
     await callback.message.edit_text(text, parse_mode="HTML")
     await callback.answer()
 
-@dp.callback_query(lambda c: c.data == "admin_view_requests")
-async def admin_view_requests(callback):
+@dp.callback_query(lambda c: c.data == "admin_view_sell_requests")
+async def admin_view_sell_requests(callback):
     if callback.from_user.id != ADMIN_ID:
         await callback.answer("⛔ Доступ запрещен!")
         return
     
-    pending = {k: v for k, v in user_requests.items() if v["status"] == "pending"}
+    pending = {k: v for k, v in sell_requests.items() if v["status"] == "pending"}
     
     if not pending:
-        await callback.message.edit_text("📭 Нет активных запросов на покупку")
+        await callback.message.edit_text("📭 Нет активных заявок на продажу")
         await callback.answer()
         return
     
-    text = "⏳ <b>Запросы на покупку:</b>\n\n"
+    text = "📝 <b>Заявки на продажу:</b>\n\n"
+    for req_id, req in pending.items():
+        text += f"🆔 {req_id} | @{req['username']} | {req['game']}\n"
+    
+    await callback.message.edit_text(text, parse_mode="HTML")
+    await callback.answer()
+
+@dp.callback_query(lambda c: c.data == "admin_view_buy_requests")
+async def admin_view_buy_requests(callback):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("⛔ Доступ запрещен!")
+        return
+    
+    pending = {k: v for k, v in buy_requests.items() if v["status"] == "pending"}
+    
+    if not pending:
+        await callback.message.edit_text("📭 Нет активных заявок на покупку")
+        await callback.answer()
+        return
+    
+    text = "⏳ <b>Заявки на покупку:</b>\n\n"
     for req_id, req in pending.items():
         text += f"🆔 {req_id} | @{req['username']} | {req['account_name']} | {req['price']} руб.\n"
     
     await callback.message.edit_text(text, parse_mode="HTML")
     await callback.answer()
 
-# Команды для админа
-@dp.message(Command("accept_sell"))
-async def accept_sell(message: types.Message):
-    if message.chat.id != ADMIN_ID:
-        return
-    
-    parts = message.text.split(maxsplit=5)
-    if len(parts) < 6:
-        await message.reply(
-            "❌ Формат: /accept_sell НОМЕР_ЗАЯВКИ НАЗВАНИЕ ЦЕНА ОПИСАНИЕ ЛОГИН_ПАРОЛЬ"
-        )
-        return
-    
-    order_id = parts[1]
-    name = parts[2]
-    price = int(parts[3])
-    description = parts[4]
-    login_data = parts[5]
-    
-    if order_id not in pending_orders:
-        await message.reply("❌ Заявка не найдена!")
-        return
-    
-    order = pending_orders[order_id]
-    
-    # Создаем аккаунт
-    account_id = str(int(time.time()))
-    accounts.append({
-        "id": account_id,
-        "game": order["game"],
-        "name": name,
-        "price": price,
-        "description": description,
-        "login_data": login_data,
-        "screenshots": order["screenshots"],
-        "status": "available",
-        "created_at": datetime.now().isoformat()
-    })
-    save_data(ACCOUNTS_FILE, accounts)
-    
-    # Удаляем заявку
-    del pending_orders[order_id]
-    save_data(PENDING_ORDERS_FILE, pending_orders)
-    
-    # Уведомляем пользователя
-    await bot.send_message(
-        int(order["user_id"]),
-        f"✅ <b>Ваш аккаунт принят на продажу!</b>\n\n"
-        f"🎮 Игра: {order['game']}\n"
-        f"💰 Цена: {price} руб.\n"
-        f"📝 Название: {name}\n\n"
-        f"Как только кто-то купит аккаунт, мы свяжемся с вами!",
-        parse_mode="HTML"
-    )
-    
-    await message.reply(f"✅ Аккаунт добавлен! ID: {account_id}")
-
-@dp.message(Command("confirm_pay"))
+@dp.message(Command("confirm_buy"))
 async def confirm_payment(message: types.Message):
     if message.chat.id != ADMIN_ID:
         return
     
     parts = message.text.split()
     if len(parts) < 2:
-        await message.reply("❌ Формат: /confirm_pay НОМЕР_ЗАПРОСА")
+        await message.reply("❌ Формат: /confirm_buy НОМЕР_ЗАПРОСА")
         return
     
     request_id = parts[1]
     
-    if request_id not in user_requests:
+    if request_id not in buy_requests:
         await message.reply("❌ Запрос не найден!")
         return
     
-    req = user_requests[request_id]
+    req = buy_requests[request_id]
     req["status"] = "confirmed"
-    save_data(USER_REQUESTS_FILE, user_requests)
+    save_data(BUY_REQUESTS_FILE, buy_requests)
     
-    # Отправляем данные аккаунта пользователю
     await bot.send_message(
         int(req["user_id"]),
         f"✅ <b>Поздравляем с покупкой!</b>\n\n"
@@ -554,36 +553,34 @@ async def confirm_payment(message: types.Message):
         parse_mode="HTML"
     )
     
-    # Отмечаем аккаунт как проданный
     for acc in accounts:
         if acc["id"] == req["account_id"]:
             acc["status"] = "sold"
             save_data(ACCOUNTS_FILE, accounts)
             break
     
-    await message.reply(f"✅ Покупка подтверждена! Данные отправлены пользователю @{req['username']}")
+    await message.reply(f"✅ Покупка подтверждена! Данные отправлены @{req['username']}")
 
-@dp.message(Command("reject_pay"))
+@dp.message(Command("reject_buy"))
 async def reject_payment(message: types.Message):
     if message.chat.id != ADMIN_ID:
         return
     
     parts = message.text.split()
     if len(parts) < 2:
-        await message.reply("❌ Формат: /reject_pay НОМЕР_ЗАПРОСА")
+        await message.reply("❌ Формат: /reject_buy НОМЕР_ЗАПРОСА")
         return
     
     request_id = parts[1]
     
-    if request_id not in user_requests:
+    if request_id not in buy_requests:
         await message.reply("❌ Запрос не найден!")
         return
     
-    req = user_requests[request_id]
+    req = buy_requests[request_id]
     req["status"] = "rejected"
-    save_data(USER_REQUESTS_FILE, user_requests)
+    save_data(BUY_REQUESTS_FILE, buy_requests)
     
-    # Уведомляем пользователя
     await bot.send_message(
         int(req["user_id"]),
         f"❌ <b>К сожалению, оплата не прошла.</b>\n\n"
