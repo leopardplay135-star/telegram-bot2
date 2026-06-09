@@ -1,4 +1,3 @@
-cat > test_bot.py << 'EOF'
 import asyncio
 import os
 from aiogram import Bot, Dispatcher, types, F
@@ -39,4 +38,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-EOF
