@@ -11,8 +11,10 @@ TOKEN = os.environ.get("TOKEN")
 ADMIN_ID = int(os.environ.get("ADMIN_ID", 0))
 
 if not TOKEN:
-    print("❌ ОШИБКА: TOKEN не задан!")
-    exit(1)
+    raise RuntimeError("❌ ОШИБКА: TOKEN не задан в переменных окружения!")
+
+if ADMIN_ID == 0:
+    raise RuntimeError("❌ ОШИБКА: ADMIN_ID не задан в переменных окружения!")
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
@@ -25,7 +27,10 @@ def load_data(filename, default):
     try:
         with open(filename, 'r') as f:
             return json.load(f)
-    except:
+    except FileNotFoundError:
+        return default
+    except json.JSONDecodeError:
+        print(f"⚠️ Ошибка чтения {filename}, создаю новый файл")
         return default
 
 def save_data(filename, data):
@@ -77,7 +82,7 @@ def accounts_list_by_game(game_code):
 
 def account_action_menu(account_id):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ Купить аккаунт", callback_data=f"buy_{account_id}")],
+        [InlineKeyboardButton(text="✅ Купить аккаунт", callback_data=f"buy_account_{account_id}")],
         [InlineKeyboardButton(text="🔙 Назад к списку", callback_data="back_to_accounts")]
     ])
     return keyboard
@@ -92,7 +97,7 @@ def admin_menu():
     ])
     return keyboard
 
-def delete_accounts_list():
+def delete_accounts_list(admin_id):
     if not accounts:
         return None
     keyboard = InlineKeyboardMarkup(inline_keyboard=[])
@@ -102,7 +107,7 @@ def delete_accounts_list():
         keyboard.inline_keyboard.append([
             InlineKeyboardButton(
                 text=f"{status_emoji} [{game_name}] {acc['name']} - {acc['price']} руб.",
-                callback_data=f"del_{acc['id']}"
+                callback_data=f"del_acc_{acc['id']}"
             )
         ])
     keyboard.inline_keyboard.append([InlineKeyboardButton(text="🔙 Назад в админку", callback_data="back_to_admin")])
@@ -249,10 +254,17 @@ async def start_buy(callback):
     )
     await callback.answer()
 
-@dp.callback_query(lambda c: c.data.startswith("buy_") and c.data.count("_") == 1)
+@dp.callback_query(lambda c: c.data.startswith("buy_") and not c.data.startswith("buy_account_"))
 async def buy_game_selected(callback):
     game_code = callback.data.split("_")[1]
     keyboard = accounts_list_by_game(game_code)
+    
+    # Сохраняем выбранную игру для возврата
+    user_id = str(callback.from_user.id)
+    if user_id not in user_temp:
+        user_temp[user_id] = {}
+    user_temp[user_id]["last_game"] = game_code
+    
     if not keyboard:
         await callback.message.edit_text(
             f"📭 <b>{get_game_display(game_code)}</b>\n\n"
@@ -301,9 +313,9 @@ async def view_account(callback):
     )
     await callback.answer()
 
-@dp.callback_query(lambda c: c.data.startswith("buy_") and len(c.data) > 4 and c.data != "buy")
+@dp.callback_query(lambda c: c.data.startswith("buy_account_"))
 async def buy_account(callback):
-    account_id = callback.data.split("_")[1]
+    account_id = callback.data.split("_")[2]
     account = None
     for acc in accounts:
         if acc["id"] == account_id:
@@ -385,48 +397,62 @@ async def admin_add_start(callback):
     )
     await callback.answer()
 
-@dp.message(lambda message: message.chat.id == ADMIN_ID)
+# Обработчик текстовых сообщений от админа (НЕ команд)
+@dp.message(F.chat.id == ADMIN_ID, F.text, ~F.text.startswith("/"))
 async def admin_process_data(message: types.Message):
     user_id = str(message.from_user.id)
     
     if user_id not in user_temp or user_temp[user_id].get("step") != "admin_adding":
         return
     
-    if user_temp[user_id].get("account_data") is None:
+    if user_temp[user_id].get("account_data") is not None:
+        return
+    
+    try:
+        parts = message.text.split(":", 5)
+        if len(parts) < 6:
+            await message.reply("❌ Неверный формат!\n\nНужно: игра:название:цена:описание:логин:пароль")
+            return
+        
+        game_input = parts[0].lower().strip()
+        if "brawl" in game_input:
+            game_code = GAME_BRAWL
+        elif "fortnite" in game_input or game_input == "fort":
+            game_code = GAME_FORTNITE
+        else:
+            await message.reply("❌ Неизвестная игра. Используйте 'brawl' или 'fortnite'")
+            return
+        
+        # Проверка цены
         try:
-            parts = message.text.split(":", 5)
-            if len(parts) < 6:
-                await message.reply("❌ Неверный формат!\n\nНужно: игра:название:цена:описание:логин:пароль")
-                return
-            
-            game_input = parts[0].lower().strip()
-            if "brawl" in game_input:
-                game_code = GAME_BRAWL
-            elif "fortnite" in game_input or game_input == "fort":
-                game_code = GAME_FORTNITE
-            else:
-                await message.reply("❌ Неизвестная игра. Используйте 'brawl' или 'fortnite'")
-                return
-            
-            user_temp[user_id]["account_data"] = {
-                "game_code": game_code,
-                "name": parts[1].strip(),
-                "price": int(parts[2].strip()),
-                "description": parts[3].strip(),
-                "login_data": f"{parts[4].strip()}:{parts[5].strip()}"
-            }
-            
-            await message.reply(
-                f"✅ <b>Данные приняты!</b>\n\n"
-                f"🎮 {get_game_display(game_code)}\n"
-                f"🎯 {parts[1]}\n"
-                f"💰 {parts[2]} руб.\n\n"
-                f"📸 <b>Шаг 2:</b> Теперь отправьте СКРИНШОТЫ (можно несколько)\n"
-                f"Когда закончите, нажмите <b>/save_account</b>",
-                parse_mode="HTML"
-            )
-        except Exception as e:
-            await message.reply(f"❌ Ошибка: {e}")
+            price = int(parts[2].strip())
+        except ValueError:
+            await message.reply("❌ Цена должна быть числом!")
+            return
+        
+        login = parts[4].strip()
+        password = parts[5].strip()
+        
+        user_temp[user_id]["account_data"] = {
+            "game_code": game_code,
+            "name": parts[1].strip(),
+            "price": price,
+            "description": parts[3].strip(),
+            "login": login,
+            "password": password
+        }
+        
+        await message.reply(
+            f"✅ <b>Данные приняты!</b>\n\n"
+            f"🎮 {get_game_display(game_code)}\n"
+            f"🎯 {parts[1]}\n"
+            f"💰 {price} руб.\n\n"
+            f"📸 <b>Шаг 2:</b> Теперь отправьте СКРИНШОТЫ (можно несколько)\n"
+            f"Когда закончите, нажмите <b>/save_account</b>",
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        await message.reply(f"❌ Ошибка: {e}")
 
 @dp.message(Command("save_account"))
 async def admin_save_account(message: types.Message):
@@ -440,7 +466,7 @@ async def admin_save_account(message: types.Message):
         return
     
     if user_temp[user_id].get("account_data") is None:
-        await message.reply("❌ Сначала отправьте ДАННЫЕ аккаунта!\n\nФормат: brawl:Название:Цена:Описание:Логин:Пароль")
+        await message.reply("❌ Сначала отправьте ДАННЫЕ аккаунта текстом!\n\nФормат: brawl:Название:Цена:Описание:Логин:Пароль")
         return
     
     if not user_temp[user_id].get("screenshots"):
@@ -448,17 +474,27 @@ async def admin_save_account(message: types.Message):
         return
     
     # Создаем аккаунт
-    acc = user_temp[user_id]["account_data"]
-    acc["id"] = str(int(time.time()))
-    acc["status"] = "available"
-    acc["screenshots"] = user_temp[user_id]["screenshots"]
-    acc["created_at"] = datetime.now().isoformat()
+    acc_data = user_temp[user_id]["account_data"]
+    acc = {
+        "id": str(int(time.time())),
+        "game_code": acc_data["game_code"],
+        "name": acc_data["name"],
+        "price": acc_data["price"],
+        "description": acc_data["description"],
+        "login": acc_data["login"],
+        "password": acc_data["password"],
+        "login_data": f"{acc_data['login']}:{acc_data['password']}",
+        "screenshots": user_temp[user_id]["screenshots"],
+        "status": "available",
+        "created_at": datetime.now().isoformat()
+    }
     
     accounts.append(acc)
     save_data(ACCOUNTS_FILE, accounts)
     
     await message.reply(
         f"✅ <b>Аккаунт успешно добавлен!</b>\n\n"
+        f"🆔 ID: {acc['id']}\n"
         f"🎮 {get_game_display(acc['game_code'])}\n"
         f"🎯 {acc['name']}\n"
         f"💰 {acc['price']} руб.\n"
@@ -467,6 +503,7 @@ async def admin_save_account(message: types.Message):
         parse_mode="HTML"
     )
     
+    # Очищаем временные данные
     del user_temp[user_id]
 
 @dp.callback_query(lambda c: c.data == "admin_list_accounts")
@@ -491,7 +528,7 @@ async def admin_delete_list(callback):
     if callback.from_user.id != ADMIN_ID:
         await callback.answer("⛔ Доступ запрещен!")
         return
-    keyboard = delete_accounts_list()
+    keyboard = delete_accounts_list(callback.from_user.id)
     if not keyboard:
         await callback.message.edit_text("📭 Нет аккаунтов для удаления")
         await callback.answer()
@@ -499,12 +536,12 @@ async def admin_delete_list(callback):
     await callback.message.edit_text("🗑 <b>Выберите аккаунт для удаления:</b>", reply_markup=keyboard, parse_mode="HTML")
     await callback.answer()
 
-@dp.callback_query(lambda c: c.data.startswith("del_"))
+@dp.callback_query(lambda c: c.data.startswith("del_acc_"))
 async def admin_delete_confirm(callback):
     if callback.from_user.id != ADMIN_ID:
         await callback.answer("⛔ Доступ запрещен!")
         return
-    account_id = callback.data.split("_")[1]
+    account_id = callback.data.split("_")[2]
     account = None
     for acc in accounts:
         if acc["id"] == account_id:
@@ -514,7 +551,12 @@ async def admin_delete_confirm(callback):
         await callback.message.edit_text("❌ Аккаунт не найден!")
         await callback.answer()
         return
-    user_temp["delete_acc"] = account_id
+    
+    user_id = str(callback.from_user.id)
+    if user_id not in user_temp:
+        user_temp[user_id] = {}
+    user_temp[user_id]["delete_acc"] = account_id
+    
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✅ ДА, удалить", callback_data="confirm_delete"),
          InlineKeyboardButton(text="❌ НЕТ, отмена", callback_data="back_to_admin")]
@@ -532,13 +574,17 @@ async def admin_delete_do(callback):
     if callback.from_user.id != ADMIN_ID:
         await callback.answer("⛔ Доступ запрещен!")
         return
-    account_id = user_temp.get("delete_acc")
+    
+    user_id = str(callback.from_user.id)
+    account_id = user_temp.get(user_id, {}).get("delete_acc")
+    
     if account_id:
         global accounts
         accounts = [acc for acc in accounts if acc["id"] != account_id]
         save_data(ACCOUNTS_FILE, accounts)
         await callback.message.edit_text("✅ <b>Аккаунт удален!</b>", parse_mode="HTML")
-        del user_temp["delete_acc"]
+        if user_id in user_temp and "delete_acc" in user_temp[user_id]:
+            del user_temp[user_id]["delete_acc"]
     else:
         await callback.message.edit_text("❌ Ошибка!")
     await callback.answer()
@@ -590,12 +636,15 @@ async def admin_confirm_buy(message: types.Message):
     req = buy_requests[request_id]
     req["status"] = "confirmed"
     save_data(BUY_REQUESTS_FILE, buy_requests)
+    
     await bot.send_message(
         int(req["user_id"]),
         f"✅ <b>Поздравляем с покупкой!</b>\n\n"
         f"🎯 Аккаунт: {req['account_name']}\n"
         f"💰 Цена: {req['price']} руб.\n\n"
-        f"🔐 Данные для входа:\n<code>{req['account_data']}</code>\n\n"
+        f"🔐 Данные для входа:\n"
+        f"Логин: <code>{req.get('login', 'не указан')}</code>\n"
+        f"Пароль: <code>{req.get('password', 'не указан')}</code>\n\n"
         f"Спасибо за покупку! 🎉",
         parse_mode="HTML"
     )
@@ -651,7 +700,27 @@ async def back_to_menu(callback):
 
 @dp.callback_query(lambda c: c.data == "back_to_accounts")
 async def back_to_accounts(callback):
-    await start_buy(callback)
+    # Возвращаемся к сохраненной игре
+    user_id = str(callback.from_user.id)
+    last_game = user_temp.get(user_id, {}).get("last_game", GAME_BRAWL)
+    
+    keyboard = accounts_list_by_game(last_game)
+    if not keyboard:
+        await start_buy(callback)
+        return
+    
+    await callback.message.edit_text(
+        f"📱 <b>{get_game_display(last_game)}</b>\n\nДоступные аккаунты:",
+        reply_markup=keyboard,
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+# Обработчик неизвестных команд
+@dp.message()
+async def unknown_command(message: types.Message):
+    if message.text and message.text.startswith("/"):
+        await message.answer("❌ Неизвестная команда. Напишите /start для начала работы.")
 
 # ==================== ЗАПУСК ====================
 async def main():
