@@ -150,13 +150,11 @@ async def sell_game_selected(callback):
 async def save_sell_photo(message: types.Message):
     user_id = str(message.from_user.id)
     
-    # Для продажи
     if user_id in user_temp and user_temp[user_id].get("step") == "selling":
         user_temp[user_id]["screenshots"].append(message.photo[-1].file_id)
         await message.answer(f"✅ Скриншот #{len(user_temp[user_id]['screenshots'])} сохранен!")
         return
     
-    # Для добавления аккаунта админом
     if user_id in user_temp and user_temp[user_id].get("step") == "admin_adding":
         user_temp[user_id]["screenshots"].append(message.photo[-1].file_id)
         await message.answer(f"✅ Скриншот #{len(user_temp[user_id]['screenshots'])} сохранен! Отправьте еще или /save_account")
@@ -259,7 +257,6 @@ async def buy_game_selected(callback):
     game_code = callback.data.split("_")[1]
     keyboard = accounts_list_by_game(game_code)
     
-    # Сохраняем выбранную игру для возврата
     user_id = str(callback.from_user.id)
     if user_id not in user_temp:
         user_temp[user_id] = {}
@@ -335,7 +332,9 @@ async def buy_account(callback):
         "username": username,
         "account_id": account_id,
         "account_name": account["name"],
-        "account_data": account.get("login_data", "Данные выдаст админ после оплаты"),
+        "login": account.get("login", "не указан"),
+        "password": account.get("password", "не указан"),
+        "account_data": account.get("login_data", f"{account.get('login', '')}:{account.get('password', '')}"),
         "price": account["price"],
         "game_code": account["game_code"],
         "status": "pending",
@@ -349,6 +348,8 @@ async def buy_account(callback):
         f"👤 Покупатель: @{username}\n"
         f"🎮 Аккаунт: {account['name']}\n"
         f"💰 Сумма: {account['price']} руб.\n\n"
+        f"📝 Логин: {account.get('login', 'не указан')}\n"
+        f"🔐 Пароль: {account.get('password', 'не указан')}\n\n"
         f"<b>Действия:</b>\n"
         f"✅ Подтвердить: <code>/confirm_buy {request_id}</code>\n"
         f"❌ Отклонить: <code>/reject_buy {request_id}</code>",
@@ -371,7 +372,6 @@ async def admin_panel(message: types.Message):
         return
     await message.answer("👑 <b>Панель администратора</b>\n\nВыберите действие:", reply_markup=admin_menu(), parse_mode="HTML")
 
-# ДОБАВЛЕНИЕ АККАУНТА
 @dp.callback_query(lambda c: c.data == "admin_add_account")
 async def admin_add_start(callback):
     if callback.from_user.id != ADMIN_ID:
@@ -397,7 +397,6 @@ async def admin_add_start(callback):
     )
     await callback.answer()
 
-# Обработчик текстовых сообщений от админа (НЕ команд)
 @dp.message(F.chat.id == ADMIN_ID, F.text, ~F.text.startswith("/"))
 async def admin_process_data(message: types.Message):
     user_id = str(message.from_user.id)
@@ -423,7 +422,6 @@ async def admin_process_data(message: types.Message):
             await message.reply("❌ Неизвестная игра. Используйте 'brawl' или 'fortnite'")
             return
         
-        # Проверка цены
         try:
             price = int(parts[2].strip())
         except ValueError:
@@ -439,7 +437,8 @@ async def admin_process_data(message: types.Message):
             "price": price,
             "description": parts[3].strip(),
             "login": login,
-            "password": password
+            "password": password,
+            "login_data": f"{login}:{password}"
         }
         
         await message.reply(
@@ -473,7 +472,6 @@ async def admin_save_account(message: types.Message):
         await message.reply("❌ Добавьте хотя бы один скриншот! Отправьте фото и снова /save_account")
         return
     
-    # Создаем аккаунт
     acc_data = user_temp[user_id]["account_data"]
     acc = {
         "id": str(int(time.time())),
@@ -483,7 +481,7 @@ async def admin_save_account(message: types.Message):
         "description": acc_data["description"],
         "login": acc_data["login"],
         "password": acc_data["password"],
-        "login_data": f"{acc_data['login']}:{acc_data['password']}",
+        "login_data": acc_data["login_data"],
         "screenshots": user_temp[user_id]["screenshots"],
         "status": "available",
         "created_at": datetime.now().isoformat()
@@ -503,7 +501,6 @@ async def admin_save_account(message: types.Message):
         parse_mode="HTML"
     )
     
-    # Очищаем временные данные
     del user_temp[user_id]
 
 @dp.callback_query(lambda c: c.data == "admin_list_accounts")
@@ -637,17 +634,21 @@ async def admin_confirm_buy(message: types.Message):
     req["status"] = "confirmed"
     save_data(BUY_REQUESTS_FILE, buy_requests)
     
+    login = req.get("login", "не указан")
+    password = req.get("password", "не указан")
+    
     await bot.send_message(
         int(req["user_id"]),
         f"✅ <b>Поздравляем с покупкой!</b>\n\n"
         f"🎯 Аккаунт: {req['account_name']}\n"
         f"💰 Цена: {req['price']} руб.\n\n"
-        f"🔐 Данные для входа:\n"
-        f"Логин: <code>{req.get('login', 'не указан')}</code>\n"
-        f"Пароль: <code>{req.get('password', 'не указан')}</code>\n\n"
+        f"🔐 <b>Данные для входа:</b>\n"
+        f"📝 Логин: <code>{login}</code>\n"
+        f"🔑 Пароль: <code>{password}</code>\n\n"
         f"Спасибо за покупку! 🎉",
         parse_mode="HTML"
     )
+    
     for acc in accounts:
         if acc["id"] == req["account_id"]:
             acc["status"] = "sold"
@@ -669,69 +670,4 @@ async def admin_reject_buy(message: types.Message):
         return
     req = buy_requests[request_id]
     req["status"] = "rejected"
-    save_data(BUY_REQUESTS_FILE, buy_requests)
-    await bot.send_message(
-        int(req["user_id"]),
-        f"❌ <b>К сожалению, оплата не прошла.</b>\n\n"
-        f"Пожалуйста, свяжитесь с админом: @{message.from_user.username}\n"
-        f"Вы можете попробовать снова с /start",
-        parse_mode="HTML"
-    )
-    await message.reply(f"❌ Запрос #{request_id} отклонен. Пользователь уведомлен.")
-
-@dp.callback_query(lambda c: c.data == "back_to_admin")
-async def back_to_admin(callback):
-    if callback.from_user.id != ADMIN_ID:
-        await callback.answer("⛔ Доступ запрещен!")
-        return
-    await callback.message.edit_text("👑 <b>Панель администратора</b>\n\nВыберите действие:", reply_markup=admin_menu(), parse_mode="HTML")
-    await callback.answer()
-
-@dp.callback_query(lambda c: c.data == "back_to_menu")
-async def back_to_menu(callback):
-    welcome_text = (
-        "🏪 <b>ДОБРО ПОЖАЛОВАТЬ В МАГАЗИН АККАУНТОВ!</b>\n\n"
-        "💰 <b>Продать</b> аккаунт — отправьте скриншоты, админ оценит\n"
-        "🛒 <b>Купить</b> аккаунт — выберите игру\n\n"
-        "⬇️ Выберите действие:"
-    )
-    await callback.message.edit_text(welcome_text, reply_markup=main_menu(), parse_mode="HTML")
-    await callback.answer()
-
-@dp.callback_query(lambda c: c.data == "back_to_accounts")
-async def back_to_accounts(callback):
-    # Возвращаемся к сохраненной игре
-    user_id = str(callback.from_user.id)
-    last_game = user_temp.get(user_id, {}).get("last_game", GAME_BRAWL)
-    
-    keyboard = accounts_list_by_game(last_game)
-    if not keyboard:
-        await start_buy(callback)
-        return
-    
-    await callback.message.edit_text(
-        f"📱 <b>{get_game_display(last_game)}</b>\n\nДоступные аккаунты:",
-        reply_markup=keyboard,
-        parse_mode="HTML"
-    )
-    await callback.answer()
-
-# Обработчик неизвестных команд
-@dp.message()
-async def unknown_command(message: types.Message):
-    if message.text and message.text.startswith("/"):
-        await message.answer("❌ Неизвестная команда. Напишите /start для начала работы.")
-
-# ==================== ЗАПУСК ====================
-async def main():
-    print("=" * 50)
-    print("🤖 МАГАЗИН АККАУНТОВ ЗАПУЩЕН!")
-    me = await bot.get_me()
-    print(f"✅ Бот: @{me.username}")
-    print(f"👑 Админ ID: {ADMIN_ID}")
-    print(f"📦 Аккаунтов в базе: {len(accounts)}")
-    print("=" * 50)
-    await dp.start_polling(bot)
-
-if __name__ == "__main__":
-    asyncio.run(main())
+    save_data(BUY_REQUESTS
