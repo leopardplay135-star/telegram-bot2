@@ -5,7 +5,7 @@ from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-# ========== НАСТРОЙКИ (берутся из переменных окружения) ==========
+# ========== НАСТРОЙКИ ==========
 TOKEN = os.environ.get("TOKEN")
 ADMIN_ID = int(os.environ.get("ADMIN_ID", 0))
 
@@ -16,7 +16,6 @@ if not TOKEN:
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
-# Файл для хранения данных
 DATA_FILE = "user_data.json"
 
 def load_data():
@@ -104,14 +103,22 @@ async def send_to_admin(message: types.Message):
     
     if ADMIN_ID:
         try:
-            # Отправляем админу
+            # Сохраняем ID пользователя, чтобы потом знать кому отвечать
+            user_data[user_id]["step"] = "waiting_for_price"
+            user_data[user_id]["username"] = username
+            user_data[user_id]["game"] = data["game"]
+            save_data(user_data)
+            
+            # Отправляем админу с указанием user_id в тексте
             await bot.send_message(
                 ADMIN_ID,
                 f"🆕 <b>НОВАЯ ЗАЯВКА НА ПРОДАЖУ!</b>\n\n"
-                f"👤 <b>Продавец:</b> @{username}\n"
+                f"🆔 <b>ID продавца:</b> <code>{user_id}</code>\n"
+                f"👤 <b>Username:</b> @{username}\n"
                 f"🎮 <b>Игра:</b> {data['game']}\n"
                 f"📸 <b>Скриншотов:</b> {len(screenshots)}\n\n"
-                f"<i>Напиши цену для этого аккаунта в ответ на это сообщение</i>",
+                f"<i>📝 Напиши цену для этого аккаунта в ответ на это сообщение</i>\n"
+                f"(Бот отправит цену автоматически)",
                 parse_mode="HTML"
             )
             
@@ -124,32 +131,80 @@ async def send_to_admin(message: types.Message):
                 parse_mode="HTML"
             )
             
-            del user_data[user_id]
-            save_data(user_data)
-            
         except Exception as e:
             await message.answer(f"❌ Ошибка при отправке: {e}")
     else:
-        await message.answer(
-            f"✅ <b>Заявка принята!</b>\n\n"
-            f"Игра: {data['game']}\n"
-            f"Скриншотов: {len(screenshots)}\n\n"
-            f"⚠️ Админ еще не настроен, но твои данные сохранены.",
+        await message.answer("⚠️ Админ не настроен")
+
+# ========== ГЛАВНАЯ ФУНКЦИЯ - ОТПРАВКА ЦЕНЫ ПОЛЬЗОВАТЕЛЮ ==========
+@dp.message(lambda message: message.chat.id == ADMIN_ID and message.reply_to_message)
+async def send_price_to_user(message: types.Message):
+    """
+    Когда админ отвечает на сообщение с заявкой,
+    бот отправляет цену пользователю
+    """
+    # Получаем текст ответа админа (цену)
+    price = message.text
+    
+    # Ищем в переписке с админом сообщение, на которое он ответил
+    replied_msg = message.reply_to_message
+    
+    if not replied_msg:
+        await message.answer("❌ Ответь на сообщение с заявкой")
+        return
+    
+    # Из сообщения админу достаем ID пользователя
+    # Оно сохранено в тексте: "🆔 ID продавца: 123456789"
+    import re
+    match = re.search(r'🆔 ID продавца: <code>(\d+)</code>', replied_msg.html_text)
+    
+    if not match:
+        await message.answer("❌ Не удалось найти ID пользователя в сообщении")
+        return
+    
+    user_id = match.group(1)
+    game = None
+    
+    # Ищем игру в данных
+    if user_id in user_data:
+        game = user_data[user_id].get("game", "аккаунт")
+    else:
+        # Если данных нет, пробуем найти игру в тексте сообщения
+        game_match = re.search(r'🎮 <b>Игра:</b> (.+)', replied_msg.html_text)
+        if game_match:
+            game = game_match.group(1)
+        else:
+            game = "аккаунт"
+    
+    try:
+        # Отправляем цену пользователю
+        await bot.send_message(
+            int(user_id),
+            f"💰 <b>Твой {game} оценили!</b>\n\n"
+            f"Предложенная цена: <b>{price}</b>\n\n"
+            f"Если согласен, свяжись с админом: @{message.from_user.username}\n"
+            f"Если нет — начни заново с /start",
             parse_mode="HTML"
         )
+        
+        # Уведомляем админа об успехе
+        await message.reply(f"✅ Цена отправлена пользователю!\n\n💰 Цена: {price}\n🆔 ID: {user_id}")
+        
+        # Удаляем данные пользователя (заявка обработана)
+        if user_id in user_data:
+            del user_data[user_id]
+            save_data(user_data)
+            
+    except Exception as e:
+        await message.reply(f"❌ Ошибка при отправке пользователю: {e}")
 
-@dp.message()
-async def admin_response(message: types.Message):
-    # Если админ отвечает на сообщение с заявкой
-    if ADMIN_ID and message.chat.id == ADMIN_ID and message.reply_to_message:
-        # Здесь можно добавить логику ответа пользователю
-        await message.reply("✅ Цена отправлена (функция дорабатывается)")
-
+# ========== ЗАПУСК ==========
 async def main():
     print("=" * 50)
     print("🤖 ТЕЛЕГРАМ БОТ ЗАПУЩЕН!")
     me = await bot.get_me()
     print(f"✅ Бот: @{me.username}")
+    print(f"👑 Админ ID: {ADMIN_ID}")
     print("=" * 50)
     await dp.start_polling(bot)
 
