@@ -72,7 +72,7 @@ def accounts_list_by_game(game_code):
         keyboard.inline_keyboard.append([
             InlineKeyboardButton(
                 text=f"🎮 {acc['name']} - {acc['price']} руб.",
-                callback_data=f"view_{acc['id']}"
+                callback_data=f"view_acc_{acc['id']}"
             )
         ])
     keyboard.inline_keyboard.append([InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu")])
@@ -80,7 +80,7 @@ def accounts_list_by_game(game_code):
 
 def account_action_menu(account_id):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ Купить аккаунт", callback_data=f"buy_{account_id}")],
+        [InlineKeyboardButton(text="✅ Купить аккаунт", callback_data=f"buy_acc_{account_id}")],
         [InlineKeyboardButton(text="🔙 Назад к списку", callback_data="back_to_accounts")]
     ])
     return keyboard
@@ -232,7 +232,7 @@ async def start_buy(callback):
     )
     await callback.answer()
 
-@dp.callback_query(lambda c: c.data.startswith("buy_") and len(c.data.split("_")) == 2)
+@dp.callback_query(lambda c: c.data.startswith("buy_") and c.data.count("_") == 1)
 async def buy_game_selected(callback):
     game_code = callback.data.split("_")[1]
     keyboard = accounts_list_by_game(game_code)
@@ -251,21 +251,34 @@ async def buy_game_selected(callback):
     )
     await callback.answer()
 
-@dp.callback_query(lambda c: c.data.startswith("view_"))
+# Просмотр аккаунта
+@dp.callback_query(lambda c: c.data.startswith("view_acc_"))
 async def view_account(callback):
-    account_id = callback.data.split("_")[1]
+    account_id = callback.data.split("_")[2]  # view_acc_123456 -> берем 123456
+    print(f"[DEBUG] Просмотр аккаунта с ID: {account_id}")
+    
+    # Ищем аккаунт по ID
     account = None
     for acc in accounts:
         if acc["id"] == account_id:
             account = acc
             break
-    if not account or account.get("status") != "available":
+    
+    if not account:
+        await callback.message.answer("❌ Аккаунт не найден!")
+        await callback.answer()
+        return
+    
+    if account.get("status") != "available":
         await callback.message.answer("❌ Аккаунт больше не доступен!")
         await callback.answer()
         return
+    
+    # Отправляем скриншоты
     if account.get("screenshots"):
         for photo in account["screenshots"]:
             await callback.message.answer_photo(photo)
+    
     text = (
         f"🎮 <b>{account['name']}</b>\n\n"
         f"💰 Цена: <b>{account['price']} руб.</b>\n"
@@ -273,30 +286,53 @@ async def view_account(callback):
         f"📝 Описание:\n{account['description']}\n\n"
         f"⚠️ После оплаты вы получите логин и пароль"
     )
-    await callback.message.answer(text, reply_markup=account_action_menu(account_id), parse_mode="HTML")
+    
+    await callback.message.answer(
+        text,
+        reply_markup=account_action_menu(account_id),
+        parse_mode="HTML"
+    )
     await callback.answer()
 
-@dp.callback_query(lambda c: c.data.startswith("buy_") and len(c.data.split("_")) == 2 and c.data != "buy")
+# Покупка аккаунта
+@dp.callback_query(lambda c: c.data.startswith("buy_acc_"))
 async def buy_account(callback):
-    account_id = callback.data.split("_")[1]
+    account_id = callback.data.split("_")[2]  # buy_acc_123456 -> берем 123456
+    print(f"[DEBUG] Покупка аккаунта с ID: {account_id}")
+    
+    # Ищем аккаунт
     account = None
     for acc in accounts:
         if acc["id"] == account_id:
             account = acc
             break
-    if not account or account.get("status") != "available":
+    
+    if not account:
+        await callback.message.answer("❌ Аккаунт не найден!")
+        await callback.answer()
+        return
+    
+    if account.get("status") != "available":
         await callback.message.answer("❌ Аккаунт уже куплен!")
         await callback.answer()
         return
+    
     request_id = str(int(time.time()))
     username = callback.from_user.username or callback.from_user.first_name
+    
     buy_requests[request_id] = {
-        "user_id": str(callback.from_user.id), "username": username,
-        "account_id": account_id, "account_name": account["name"],
+        "user_id": str(callback.from_user.id),
+        "username": username,
+        "account_id": account_id,
+        "account_name": account["name"],
         "account_data": account.get("login_data", "Данные выдаст админ после оплаты"),
-        "price": account["price"], "game_code": account["game_code"], "status": "pending"
+        "price": account["price"],
+        "game_code": account["game_code"],
+        "status": "pending",
+        "created_at": datetime.now().isoformat()
     }
     save_data(BUY_REQUESTS_FILE, buy_requests)
+    
     await bot.send_message(
         ADMIN_ID,
         f"🛒 <b>НОВЫЙ ЗАПРОС НА ПОКУПКУ #{request_id}</b>\n\n"
@@ -308,6 +344,7 @@ async def buy_account(callback):
         f"❌ Отклонить: <code>/reject_buy {request_id}</code>",
         parse_mode="HTML"
     )
+    
     await callback.message.edit_text(
         f"✅ <b>Запрос на покупку отправлен!</b>\n\n"
         f"Номер запроса: <code>{request_id}</code>\n"
@@ -547,7 +584,8 @@ async def admin_confirm_buy(message: types.Message):
         f"✅ <b>Поздравляем с покупкой!</b>\n\n"
         f"🎯 Аккаунт: {req['account_name']}\n"
         f"💰 Цена: {req['price']} руб.\n\n"
-        f"🔐 Данные для входа:\n<code>{req['account_data']}</code>",
+        f"🔐 Данные для входа:\n<code>{req['account_data']}</code>\n\n"
+        f"Спасибо за покупку! 🎉",
         parse_mode="HTML"
     )
     for acc in accounts:
@@ -575,7 +613,8 @@ async def admin_reject_buy(message: types.Message):
     await bot.send_message(
         int(req["user_id"]),
         f"❌ <b>К сожалению, оплата не прошла.</b>\n\n"
-        f"Пожалуйста, свяжитесь с админом: @{message.from_user.username}",
+        f"Пожалуйста, свяжитесь с админом: @{message.from_user.username}\n"
+        f"Вы можете попробовать снова с /start",
         parse_mode="HTML"
     )
     await message.reply(f"❌ Запрос #{request_id} отклонен. Пользователь уведомлен.")
