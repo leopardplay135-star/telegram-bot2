@@ -40,6 +40,21 @@ sell_requests = load_data(SELL_REQUESTS_FILE, {})
 buy_requests = load_data(BUY_REQUESTS_FILE, {})
 user_temp = {}
 
+# Нормализация названий игр
+def normalize_game(game_name):
+    game_map = {
+        "brawl": "brawl",
+        "brawl stars": "brawl",
+        "brawlstars": "brawl",
+        "fortnite": "fortnite",
+        "Brawl Stars": "brawl",
+        "Fortnite": "fortnite"
+    }
+    return game_map.get(game_name.lower(), game_name.lower())
+
+def get_game_display(game_code):
+    return "Brawl Stars" if game_code == "brawl" else "Fortnite"
+
 # ==================== КЛАВИАТУРЫ ====================
 def main_menu():
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -55,8 +70,10 @@ def game_menu(action):
     ])
     return keyboard
 
-def accounts_list_by_game(game):
-    acc_list = [acc for acc in accounts if acc.get("game") == game and acc.get("status") == "available"]
+def accounts_list_by_game(game_code):
+    # Ищем аккаунты с таким же game_code
+    acc_list = [acc for acc in accounts if acc.get("game_code") == game_code and acc.get("status") == "available"]
+    
     if not acc_list:
         return None
     
@@ -88,7 +105,6 @@ def admin_menu():
     ])
     return keyboard
 
-# Клавиатура для выбора аккаунта на удаление
 def delete_accounts_list():
     if not accounts:
         return None
@@ -127,13 +143,14 @@ async def start_sell(callback):
 
 @dp.callback_query(lambda c: c.data.startswith("sell_"))
 async def sell_game_selected(callback):
-    game = callback.data.split("_")[1]
+    game_code = callback.data.split("_")[1]
     user_id = str(callback.from_user.id)
-    game_name = "Brawl Stars" if game == "brawl" else "Fortnite"
+    game_name = get_game_display(game_code)
     
     user_temp[user_id] = {
         "step": "selling",
         "game": game_name,
+        "game_code": game_code,
         "screenshots": []
     }
     
@@ -183,6 +200,7 @@ async def finish_sell(message: types.Message):
         "user_id": user_id,
         "username": username,
         "game": data["game"],
+        "game_code": data["game_code"],
         "screenshots": screenshots,
         "status": "pending",
         "created_at": datetime.now().isoformat()
@@ -271,10 +289,10 @@ async def start_buy(callback):
 
 @dp.callback_query(lambda c: c.data.startswith("buy_"))
 async def buy_game_selected(callback):
-    game = callback.data.split("_")[1]
-    game_name = "Brawl Stars" if game == "brawl" else "Fortnite"
+    game_code = callback.data.split("_")[1]  # "brawl" или "fortnite"
+    game_name = get_game_display(game_code)
     
-    keyboard = accounts_list_by_game(game_name)
+    keyboard = accounts_list_by_game(game_code)
     
     if not keyboard:
         await callback.message.edit_text(
@@ -312,7 +330,7 @@ async def view_account(callback):
     text = (
         f"🎮 <b>{account['name']}</b>\n\n"
         f"💰 Цена: <b>{account['price']} руб.</b>\n"
-        f"🎯 Игра: {account['game']}\n"
+        f"🎯 Игра: {get_game_display(account['game_code'])}\n"
         f"📝 Описание:\n{account['description']}\n\n"
         f"⚠️ После оплаты вы получите логин и пароль"
     )
@@ -345,7 +363,8 @@ async def buy_account(callback):
         "account_name": account["name"],
         "account_data": account.get("login_data", "Данные выдаст админ после оплаты"),
         "price": account["price"],
-        "game": account["game"],
+        "game": get_game_display(account["game_code"]),
+        "game_code": account["game_code"],
         "status": "pending",
         "created_at": datetime.now().isoformat()
     }
@@ -355,7 +374,7 @@ async def buy_account(callback):
         ADMIN_ID,
         f"🛒 <b>НОВЫЙ ЗАПРОС НА ПОКУПКУ #{request_id}</b>\n\n"
         f"👤 Покупатель: @{username}\n"
-        f"🎮 Игра: {account['game']}\n"
+        f"🎮 Игра: {get_game_display(account['game_code'])}\n"
         f"🎯 Аккаунт: {account['name']}\n"
         f"💰 Сумма: {account['price']} руб.\n\n"
         f"<b>Действия:</b>\n"
@@ -388,7 +407,6 @@ async def admin_panel(message: types.Message):
         parse_mode="HTML"
     )
 
-# Удаление аккаунта - выбор
 @dp.callback_query(lambda c: c.data == "admin_delete_account")
 async def admin_delete_account_menu(callback):
     if callback.from_user.id != ADMIN_ID:
@@ -410,7 +428,6 @@ async def admin_delete_account_menu(callback):
     )
     await callback.answer()
 
-# Подтверждение удаления
 @dp.callback_query(lambda c: c.data.startswith("del_acc_"))
 async def admin_confirm_delete(callback):
     if callback.from_user.id != ADMIN_ID:
@@ -425,7 +442,6 @@ async def admin_confirm_delete(callback):
         await callback.answer()
         return
     
-    # Сохраняем ID аккаунта для подтверждения
     user_temp["admin_delete"] = {"account_id": account_id, "account_name": account["name"]}
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -436,7 +452,7 @@ async def admin_confirm_delete(callback):
     await callback.message.edit_text(
         f"⚠️ <b>Подтверждение удаления</b>\n\n"
         f"Вы действительно хотите удалить аккаунт?\n\n"
-        f"🎮 {account['game']}\n"
+        f"🎮 {get_game_display(account['game_code'])}\n"
         f"🎯 {account['name']}\n"
         f"💰 {account['price']} руб.\n"
         f"📝 {account['description']}\n\n"
@@ -446,7 +462,6 @@ async def admin_confirm_delete(callback):
     )
     await callback.answer()
 
-# ДА - удаляем
 @dp.callback_query(lambda c: c.data == "confirm_delete_yes")
 async def admin_delete_confirm(callback):
     if callback.from_user.id != ADMIN_ID:
@@ -461,12 +476,10 @@ async def admin_delete_confirm(callback):
     account_id = user_temp["admin_delete"]["account_id"]
     account_name = user_temp["admin_delete"]["account_name"]
     
-    # Удаляем аккаунт из списка
     global accounts
     accounts = [acc for acc in accounts if acc["id"] != account_id]
     save_data(ACCOUNTS_FILE, accounts)
     
-    # Очищаем временные данные
     del user_temp["admin_delete"]
     
     await callback.message.edit_text(
@@ -476,7 +489,6 @@ async def admin_delete_confirm(callback):
     )
     await callback.answer()
 
-# НЕТ - отмена
 @dp.callback_query(lambda c: c.data == "confirm_delete_no")
 async def admin_delete_cancel(callback):
     if callback.from_user.id != ADMIN_ID:
@@ -514,6 +526,9 @@ async def admin_add_account_start(callback):
         "➕ <b>Добавление аккаунта</b>\n\n"
         "Сначала отправьте ДАННЫЕ аккаунта в формате:\n\n"
         "<code>Игра:Название:Цена:Описание:Логин:Пароль</code>\n\n"
+        "Игра пишется строго:\n"
+        "• <code>Brawl Stars</code>\n"
+        "• <code>Fortnite</code>\n\n"
         "Пример:\n"
         "<code>Brawl Stars:Легендарка:5000:Полный набор всех скинов:user123:pass123</code>\n\n"
         "После этого отправьте СКРИНШОТЫ (можно несколько).\n"
@@ -532,8 +547,12 @@ async def admin_add_account_data(message: types.Message):
         
         game, name, price, description, login, password = data[0], data[1], data[2], data[3], data[4], data[5]
         
+        # Нормализуем игру
+        game_code = normalize_game(game)
+        
         user_temp["admin"]["temp_account"] = {
-            "game": game.strip(),
+            "game_display": game.strip(),
+            "game_code": game_code,
             "name": name.strip(),
             "price": int(price.strip()),
             "description": description.strip(),
@@ -581,7 +600,8 @@ async def admin_finish_account(message: types.Message):
     account_id = str(int(time.time()))
     accounts.append({
         "id": account_id,
-        "game": temp["game"],
+        "game_display": temp["game_display"],
+        "game_code": temp["game_code"],
         "name": temp["name"],
         "price": temp["price"],
         "description": temp["description"],
@@ -595,7 +615,7 @@ async def admin_finish_account(message: types.Message):
     await message.reply(
         f"✅ <b>Аккаунт добавлен!</b>\n\n"
         f"🆔 ID: {account_id}\n"
-        f"🎮 {temp['game']}\n"
+        f"🎮 {temp['game_display']}\n"
         f"🎯 {temp['name']}\n"
         f"💰 {temp['price']} руб.\n\n"
         f"Теперь аккаунт доступен для покупки!",
