@@ -282,7 +282,6 @@ async def view_account(callback):
         await callback.answer()
         return
     
-    # Отправляем скриншоты
     if account.get("screenshots"):
         for photo in account["screenshots"]:
             await callback.message.answer_photo(photo)
@@ -302,7 +301,7 @@ async def view_account(callback):
     )
     await callback.answer()
 
-@dp.callback_query(lambda c: c.data.startswith("buy_") and len(c.data) > 4)
+@dp.callback_query(lambda c: c.data.startswith("buy_") and len(c.data) > 4 and c.data != "buy")
 async def buy_account(callback):
     account_id = callback.data.split("_")[1]
     account = None
@@ -390,11 +389,9 @@ async def admin_add_start(callback):
 async def admin_process_data(message: types.Message):
     user_id = str(message.from_user.id)
     
-    # Проверяем, есть ли пользователь в процессе добавления
     if user_id not in user_temp or user_temp[user_id].get("step") != "admin_adding":
         return
     
-    # Если данные еще не введены - пробуем распарсить
     if user_temp[user_id].get("account_data") is None:
         try:
             parts = message.text.split(":", 5)
@@ -443,7 +440,7 @@ async def admin_save_account(message: types.Message):
         return
     
     if user_temp[user_id].get("account_data") is None:
-        await message.reply("❌ Сначала отправьте ДАННЫЕ аккаунта текстом!\n\nФормат: brawl:Название:Цена:Описание:Логин:Пароль")
+        await message.reply("❌ Сначала отправьте ДАННЫЕ аккаунта!\n\nФормат: brawl:Название:Цена:Описание:Логин:Пароль")
         return
     
     if not user_temp[user_id].get("screenshots"):
@@ -462,7 +459,6 @@ async def admin_save_account(message: types.Message):
     
     await message.reply(
         f"✅ <b>Аккаунт успешно добавлен!</b>\n\n"
-        f"🆔 ID: {acc['id']}\n"
         f"🎮 {get_game_display(acc['game_code'])}\n"
         f"🎯 {acc['name']}\n"
         f"💰 {acc['price']} руб.\n"
@@ -471,7 +467,6 @@ async def admin_save_account(message: types.Message):
         parse_mode="HTML"
     )
     
-    # Очищаем временные данные
     del user_temp[user_id]
 
 @dp.callback_query(lambda c: c.data == "admin_list_accounts")
