@@ -149,14 +149,13 @@ async def sell_game_selected(callback):
     )
     await callback.answer()
 
-# Обработчик фото для продажи (для всех пользователей, включая админа?)
+# Обработчик фото для продажи
 @dp.message(F.photo)
 async def save_sell_photo(message: types.Message):
     user_id = str(message.from_user.id)
     
     # Проверяем, есть ли пользователь в процессе продажи
     if user_id not in user_temp or user_temp[user_id].get("step") != "selling":
-        # Если пользователь не в процессе продажи, игнорируем
         return
     
     photo = message.photo[-1].file_id
@@ -389,28 +388,27 @@ async def admin_add_start(callback):
     if callback.from_user.id != ADMIN_ID:
         await callback.answer("⛔ Доступ запрещен!")
         return
-    user_temp["admin"] = {"step": "data"}
+    user_temp["admin"] = {"step": "waiting_data", "account": None}
     await callback.message.edit_text(
         "➕ <b>Добавление аккаунта</b>\n\n"
-        "Отправьте данные в формате:\n\n"
+        "📝 <b>Шаг 1:</b> Отправьте данные аккаунта в формате:\n\n"
         "<code>brawl:Название:Цена:Описание:Логин:Пароль</code>\n\n"
         "Или для Fortnite:\n"
         "<code>fortnite:Название:Цена:Описание:Логин:Пароль</code>\n\n"
         "Пример:\n"
-        "<code>brawl:Легендарка:5000:Полный набор скинов:user123:pass123</code>\n\n"
-        "После этого отправьте СКРИНШОТЫ (можно несколько)\n"
-        "Когда закончите, нажмите /done_account",
+        "<code>brawl:Легендарка:5000:Полный набор скинов:user123:pass123</code>",
         parse_mode="HTML"
     )
     await callback.answer()
 
-@dp.message(lambda m: m.chat.id == ADMIN_ID and user_temp.get("admin", {}).get("step") == "data")
+@dp.message(lambda m: m.chat.id == ADMIN_ID and user_temp.get("admin", {}).get("step") == "waiting_data")
 async def admin_add_data(message: types.Message):
     try:
         parts = message.text.split(":", 5)
         if len(parts) < 6:
-            await message.reply("❌ Неверный формат!\n\nНужно: игра:название:цена:описание:логин:пароль")
+            await message.reply("❌ Неверный формат!\n\nНужно: игра:название:цена:описание:логин:пароль\n\nПример:\n<code>brawl:Легендарка:5000:Описание:login:pass</code>", parse_mode="HTML")
             return
+        
         game_input = parts[0].lower().strip()
         if "brawl" in game_input:
             game_code = GAME_BRAWL
@@ -419,6 +417,8 @@ async def admin_add_data(message: types.Message):
         else:
             await message.reply(f"❌ Неизвестная игра: {game_input}\nИспользуйте 'brawl' или 'fortnite'")
             return
+        
+        # Сохраняем данные аккаунта
         user_temp["admin"]["account"] = {
             "game_code": game_code,
             "name": parts[1].strip(),
@@ -427,48 +427,76 @@ async def admin_add_data(message: types.Message):
             "login_data": f"{parts[4].strip()}:{parts[5].strip()}",
             "screenshots": []
         }
-        user_temp["admin"]["step"] = "screenshots"
+        user_temp["admin"]["step"] = "waiting_screenshots"
+        
         await message.reply(
-            f"✅ Данные приняты!\n\n"
-            f"🎮 {get_game_display(game_code)}\n"
-            f"🎯 {parts[1]}\n"
-            f"💰 {parts[2]} руб.\n\n"
-            f"📸 Теперь отправьте СКРИНШОТЫ (можно несколько)\n"
-            f"Когда закончите, нажмите /done_account"
+            f"✅ <b>Данные приняты!</b>\n\n"
+            f"🎮 Игра: {get_game_display(game_code)}\n"
+            f"🎯 Название: {parts[1]}\n"
+            f"💰 Цена: {parts[2]} руб.\n"
+            f"📝 Описание: {parts[3]}\n\n"
+            f"📸 <b>Шаг 2:</b> Теперь отправьте СКРИНШОТЫ аккаунта (можно несколько)\n"
+            f"Когда закончите, нажмите <b>/done_account</b>",
+            parse_mode="HTML"
         )
     except Exception as e:
         await message.reply(f"❌ Ошибка: {e}")
 
-@dp.message(F.photo, lambda m: m.chat.id == ADMIN_ID and user_temp.get("admin", {}).get("step") == "screenshots")
+# Обработчик фото для админа
+@dp.message(F.photo, lambda m: m.chat.id == ADMIN_ID)
 async def admin_add_screenshot(message: types.Message):
-    user_temp["admin"]["account"]["screenshots"].append(message.photo[-1].file_id)
-    await message.reply(f"✅ Скриншот #{len(user_temp['admin']['account']['screenshots'])} сохранен!")
+    # Проверяем, есть ли активный процесс добавления аккаунта
+    if "admin" not in user_temp or user_temp["admin"].get("step") != "waiting_screenshots":
+        await message.reply("❌ Сначала отправьте ДАННЫЕ аккаунта текстом!\nИспользуйте /admin → 'Добавить аккаунт'")
+        return
+    
+    if user_temp["admin"]["account"] is None:
+        await message.reply("❌ Ошибка! Сначала отправьте данные аккаунта.")
+        return
+    
+    photo = message.photo[-1].file_id
+    user_temp["admin"]["account"]["screenshots"].append(photo)
+    count = len(user_temp["admin"]["account"]["screenshots"])
+    await message.reply(f"✅ Скриншот #{count} сохранен!\nОтправьте еще или нажмите /done_account")
 
 @dp.message(Command("done_account"))
 async def admin_done_account(message: types.Message):
     if message.chat.id != ADMIN_ID:
         return
-    if "admin" not in user_temp or "account" not in user_temp["admin"]:
+    
+    if "admin" not in user_temp or user_temp["admin"].get("step") != "waiting_screenshots":
         await message.reply("❌ Нет активного добавления аккаунта.\nИспользуйте /admin → 'Добавить аккаунт'")
         return
+    
     acc = user_temp["admin"]["account"]
-    if not acc["screenshots"]:
-        await message.reply("❌ Добавьте хотя бы один скриншот!")
+    
+    if acc is None:
+        await message.reply("❌ Ошибка! Данные аккаунта не найдены.")
         return
+    
+    if not acc["screenshots"]:
+        await message.reply("❌ Добавьте хотя бы один скриншот!\nОтправьте фото и снова /done_account")
+        return
+    
+    # Создаем новый аккаунт
     acc["id"] = str(int(time.time()))
     acc["status"] = "available"
     acc["created_at"] = datetime.now().isoformat()
     accounts.append(acc)
     save_data(ACCOUNTS_FILE, accounts)
+    
     await message.reply(
-        f"✅ <b>Аккаунт добавлен!</b>\n\n"
+        f"✅ <b>Аккаунт успешно добавлен!</b>\n\n"
         f"🆔 ID: {acc['id']}\n"
         f"🎮 {get_game_display(acc['game_code'])}\n"
         f"🎯 {acc['name']}\n"
         f"💰 {acc['price']} руб.\n\n"
-        f"Теперь аккаунт доступен для покупки!",
+        f"📸 Скриншотов: {len(acc['screenshots'])}\n\n"
+        f"Теперь аккаунт доступен для покупки! 🎉",
         parse_mode="HTML"
     )
+    
+    # Очищаем временные данные
     del user_temp["admin"]
 
 @dp.callback_query(lambda c: c.data == "admin_list_accounts")
@@ -484,7 +512,7 @@ async def admin_list_accounts(callback):
     for acc in accounts:
         status_emoji = "🟢" if acc["status"] == "available" else "🔴"
         game_name = get_game_display(acc.get("game_code", "unknown"))
-        text += f"{status_emoji} [{game_name}] {acc['name']} - {acc['price']} руб.\n"
+        text += f"{status_emoji} [{game_name}] <code>{acc['id']}</code> | {acc['name']} | {acc['price']} руб.\n"
     await callback.message.edit_text(text, parse_mode="HTML")
     await callback.answer()
 
