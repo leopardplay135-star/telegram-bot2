@@ -670,4 +670,66 @@ async def admin_reject_buy(message: types.Message):
         return
     req = buy_requests[request_id]
     req["status"] = "rejected"
-    save_data(BUY_REQUESTS
+    save_data(BUY_REQUESTS_FILE, buy_requests)
+    await bot.send_message(
+        int(req["user_id"]),
+        f"❌ <b>К сожалению, оплата не прошла.</b>\n\n"
+        f"Пожалуйста, свяжитесь с админом: @{message.from_user.username}\n"
+        f"Вы можете попробовать снова с /start",
+        parse_mode="HTML"
+    )
+    await message.reply(f"❌ Запрос #{request_id} отклонен. Пользователь уведомлен.")
+
+@dp.callback_query(lambda c: c.data == "back_to_admin")
+async def back_to_admin(callback):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("⛔ Доступ запрещен!")
+        return
+    await callback.message.edit_text("👑 <b>Панель администратора</b>\n\nВыберите действие:", reply_markup=admin_menu(), parse_mode="HTML")
+    await callback.answer()
+
+@dp.callback_query(lambda c: c.data == "back_to_menu")
+async def back_to_menu(callback):
+    welcome_text = (
+        "🏪 <b>ДОБРО ПОЖАЛОВАТЬ В МАГАЗИН АККАУНТОВ!</b>\n\n"
+        "💰 <b>Продать</b> аккаунт — отправьте скриншоты, админ оценит\n"
+        "🛒 <b>Купить</b> аккаунт — выберите игру\n\n"
+        "⬇️ Выберите действие:"
+    )
+    await callback.message.edit_text(welcome_text, reply_markup=main_menu(), parse_mode="HTML")
+    await callback.answer()
+
+@dp.callback_query(lambda c: c.data == "back_to_accounts")
+async def back_to_accounts(callback):
+    user_id = str(callback.from_user.id)
+    last_game = user_temp.get(user_id, {}).get("last_game", GAME_BRAWL)
+    
+    keyboard = accounts_list_by_game(last_game)
+    if not keyboard:
+        await start_buy(callback)
+        return
+    
+    await callback.message.edit_text(
+        f"📱 <b>{get_game_display(last_game)}</b>\n\nДоступные аккаунты:",
+        reply_markup=keyboard,
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+@dp.message()
+async def unknown_command(message: types.Message):
+    if message.text and message.text.startswith("/"):
+        await message.answer("❌ Неизвестная команда. Напишите /start для начала работы.")
+
+async def main():
+    print("=" * 50)
+    print("🤖 МАГАЗИН АККАУНТОВ ЗАПУЩЕН!")
+    me = await bot.get_me()
+    print(f"✅ Бот: @{me.username}")
+    print(f"👑 Админ ID: {ADMIN_ID}")
+    print(f"📦 Аккаунтов в базе: {len(accounts)}")
+    print("=" * 50)
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    asyncio.run(main())
