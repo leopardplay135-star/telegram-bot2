@@ -35,10 +35,10 @@ def save_data(filename, data):
         json.dump(data, f, indent=2, ensure_ascii=False)
 
 # Хранилища
-accounts = load_data(ACCOUNTS_FILE, [])           # Аккаунты на продажу (добавляет админ)
-sell_requests = load_data(SELL_REQUESTS_FILE, {}) # Заявки на продажу (от пользователей)
-buy_requests = load_data(BUY_REQUESTS_FILE, {})   # Заявки на покупку
-user_temp = {}                                     # Временные данные
+accounts = load_data(ACCOUNTS_FILE, [])
+sell_requests = load_data(SELL_REQUESTS_FILE, {})
+buy_requests = load_data(BUY_REQUESTS_FILE, {})
+user_temp = {}
 
 # ==================== КЛАВИАТУРЫ ====================
 def main_menu():
@@ -127,7 +127,8 @@ async def sell_game_selected(callback):
     )
     await callback.answer()
 
-@dp.message(F.photo)
+# Обработка фото ТОЛЬКО от обычных пользователей (не админа)
+@dp.message(F.photo, lambda message: message.chat.id != ADMIN_ID)
 async def save_sell_photo(message: types.Message):
     user_id = str(message.from_user.id)
     
@@ -171,7 +172,6 @@ async def finish_sell(message: types.Message):
     }
     save_data(SELL_REQUESTS_FILE, sell_requests)
     
-    # Отправляем админу
     await bot.send_message(
         ADMIN_ID,
         f"🆕 <b>НОВАЯ ЗАЯВКА НА ПРОДАЖУ #{request_id}</b>\n\n"
@@ -228,7 +228,6 @@ async def admin_send_price(message: types.Message):
             parse_mode="HTML"
         )
         
-        # Отмечаем заявку как обработанную
         sell_requests[request_id]["status"] = "priced"
         sell_requests[request_id]["price"] = price
         save_data(SELL_REQUESTS_FILE, sell_requests)
@@ -376,21 +375,23 @@ async def admin_add_account_start(callback):
     user_temp["admin"] = {"step": "waiting_for_account_data"}
     await callback.message.edit_text(
         "➕ <b>Добавление аккаунта</b>\n\n"
-        "Отправьте данные аккаунта в формате:\n\n"
+        "Сначала отправьте ДАННЫЕ аккаунта в формате:\n\n"
         "<code>Игра:Название:Цена:Описание:Логин:Пароль</code>\n\n"
         "Пример:\n"
         "<code>Brawl Stars:Легендарка:5000:Полный набор всех скинов:user123:pass123</code>\n\n"
-        "Скриншоты отправьте отдельно после этого сообщения.",
+        "После этого отправьте СКРИНШОТЫ (можно несколько).\n"
+        "Когда закончите, нажмите /done_account",
         parse_mode="HTML"
     )
     await callback.answer()
 
+# Обработка текстовых данных от админа
 @dp.message(lambda message: message.chat.id == ADMIN_ID and user_temp.get("admin", {}).get("step") == "waiting_for_account_data")
 async def admin_add_account_data(message: types.Message):
     try:
         data = message.text.split(":")
         if len(data) < 6:
-            await message.reply("❌ Неверный формат! Нужно 6 полей через двоеточие")
+            await message.reply("❌ Неверный формат! Нужно 6 полей через двоеточие\n\nПример:\nBrawl Stars:Легендарка:5000:Описание:логин:пароль")
             return
         
         game, name, price, description, login, password = data[0], data[1], data[2], data[3], data[4], data[5]
@@ -410,17 +411,22 @@ async def admin_add_account_data(message: types.Message):
             f"🎮 {game}\n"
             f"🎯 {name}\n"
             f"💰 {price} руб.\n\n"
-            f"📸 Теперь отправьте скриншоты аккаунта (можно несколько)\n"
+            f"📸 Теперь отправьте СКРИНШОТЫ аккаунта (можно несколько)\n"
             f"Когда закончите, нажмите /done_account"
         )
     except Exception as e:
         await message.reply(f"❌ Ошибка: {e}")
 
-@dp.message(F.photo, lambda message: message.chat.id == ADMIN_ID and user_temp.get("admin", {}).get("step") == "waiting_for_screenshots")
+# Обработка фото ТОЛЬКО от админа (для добавления аккаунта)
+@dp.message(F.photo, lambda message: message.chat.id == ADMIN_ID)
 async def admin_add_screenshots(message: types.Message):
+    if "admin" not in user_temp or user_temp["admin"].get("step") != "waiting_for_screenshots":
+        await message.reply("❌ Сначала отправьте данные аккаунта текстом!\nИспользуйте /admin → 'Добавить аккаунт'")
+        return
+    
     photo = message.photo[-1].file_id
     user_temp["admin"]["temp_account"]["screenshots"].append(photo)
-    await message.reply(f"✅ Скриншот #{len(user_temp['admin']['temp_account']['screenshots'])} сохранен!")
+    await message.reply(f"✅ Скриншот #{len(user_temp['admin']['temp_account']['screenshots'])} сохранен!\nОтправьте еще или /done_account")
 
 @dp.message(Command("done_account"))
 async def admin_finish_account(message: types.Message):
@@ -428,7 +434,7 @@ async def admin_finish_account(message: types.Message):
         return
     
     if "admin" not in user_temp or user_temp["admin"].get("step") != "waiting_for_screenshots":
-        await message.reply("❌ Нет активного добавления аккаунта")
+        await message.reply("❌ Нет активного добавления аккаунта.\nИспользуйте /admin → 'Добавить аккаунт'")
         return
     
     temp = user_temp["admin"]["temp_account"]
