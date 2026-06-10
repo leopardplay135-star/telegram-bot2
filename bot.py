@@ -10,6 +10,9 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 TOKEN = os.environ.get("TOKEN")
 ADMIN_ID = int(os.environ.get("ADMIN_ID", 0))
 
+# ССЫЛКА НА КАНАЛ/ЧАТ С ОТЗЫВАМИ - ЗАМЕНИ НА СВОЮ!
+REVIEWS_LINK = "https://t.me/+XXXXXXXXXXX"  # ВСТАВЬ ССЫЛКУ НА ТВОЙ КАНАЛ/ЧАТ С ОТЗЫВАМИ
+
 if not TOKEN:
     raise RuntimeError("❌ ОШИБКА: TOKEN не задан в переменных окружения!")
 
@@ -54,7 +57,8 @@ def get_game_display(game_code):
 def main_menu():
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💰 Продать аккаунт", callback_data="sell"),
-         InlineKeyboardButton(text="🛒 Купить аккаунт", callback_data="buy")]
+         InlineKeyboardButton(text="🛒 Купить аккаунт", callback_data="buy")],
+        [InlineKeyboardButton(text="⭐ Отзывы", url=REVIEWS_LINK)]
     ])
     return keyboard
 
@@ -119,7 +123,8 @@ async def start(message: types.Message):
     welcome_text = (
         "🏪 <b>ДОБРО ПОЖАЛОВАТЬ В МАГАЗИН АККАУНТОВ!</b>\n\n"
         "💰 <b>Продать</b> аккаунт — отправьте скриншоты, админ оценит\n"
-        "🛒 <b>Купить</b> аккаунт — выберите игру\n\n"
+        "🛒 <b>Купить</b> аккаунт — выберите игру\n"
+        "⭐ <b>Отзывы</b> — перейдите в наш канал с отзывами\n\n"
         "⬇️ Выберите действие:"
     )
     await message.answer(welcome_text, reply_markup=main_menu(), parse_mode="HTML")
@@ -645,7 +650,8 @@ async def admin_confirm_buy(message: types.Message):
         f"🔐 <b>Данные для входа:</b>\n"
         f"📝 Логин: <code>{login}</code>\n"
         f"🔑 Пароль: <code>{password}</code>\n\n"
-        f"Спасибо за покупку! 🎉",
+        f"Спасибо за покупку! 🎉\n\n"
+        f"⭐ Оставьте отзыв о нашей работе: {REVIEWS_LINK}",
         parse_mode="HTML"
     )
     
@@ -693,7 +699,8 @@ async def back_to_menu(callback):
     welcome_text = (
         "🏪 <b>ДОБРО ПОЖАЛОВАТЬ В МАГАЗИН АККАУНТОВ!</b>\n\n"
         "💰 <b>Продать</b> аккаунт — отправьте скриншоты, админ оценит\n"
-        "🛒 <b>Купить</b> аккаунт — выберите игру\n\n"
+        "🛒 <b>Купить</b> аккаунт — выберите игру\n"
+        "⭐ <b>Отзывы</b> — перейдите в наш канал с отзывами\n\n"
         "⬇️ Выберите действие:"
     )
     await callback.message.edit_text(welcome_text, reply_markup=main_menu(), parse_mode="HTML")
@@ -728,6 +735,7 @@ async def main():
     print(f"✅ Бот: @{me.username}")
     print(f"👑 Админ ID: {ADMIN_ID}")
     print(f"📦 Аккаунтов в базе: {len(accounts)}")
+    print(f"⭐ Канал с отзывами: {REVIEWS_LINK}")
     print("=" * 50)
     await dp.start_polling(bot)
 
