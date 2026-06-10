@@ -11,7 +11,7 @@ TOKEN = os.environ.get("TOKEN")
 ADMIN_ID = int(os.environ.get("ADMIN_ID", 0))
 
 # ССЫЛКА НА КАНАЛ/ЧАТ С ОТЗЫВАМИ - ЗАМЕНИ НА СВОЮ!
-REVIEWS_LINK = "https://t.me/+XXXXXXXXXXX"  # ВСТАВЬ ССЫЛКУ НА ТВОЙ КАНАЛ/ЧАТ С ОТЗЫВАМИ
+REVIEWS_LINK = "https://t.me/+jn-KoD8eps04NzUx"  # ВСТАВЬ ССЫЛКУ НА ТВОЙ КАНАЛ/ЧАТ С ОТЗЫВАМИ
 
 if not TOKEN:
     raise RuntimeError("❌ ОШИБКА: TOKEN не задан в переменных окружения!")
